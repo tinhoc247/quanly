@@ -102,7 +102,7 @@ const ADMIN_KEY = "teamgvth";
 // dạng ".../exec" vào đây. Khác với Cloud Functions (mỗi hàm 1 URL riêng), Apps Script chỉ
 // có DUY NHẤT 1 URL — tên action được gửi kèm trong payload để backend tự định tuyến.
 const FUNCTIONS_ORIGIN =
-  "https://script.google.com/macros/s/AKfycby84BSngc9uw3abnxM5WWphJMr-ypIAZD4s6F6KuZcmupjBHMUPwsHgXew0Z7f8ON9E/exec";
+  "https://script.google.com/macros/s/AKfycbxhM987yDEh1AMKrdxgHWgPM4318R2g71olrryb7sry-4TQXBpsnmJFuXQGHXHErA/exec";
 async function callAdminApi(action, payload) {
   let res;
   try {
