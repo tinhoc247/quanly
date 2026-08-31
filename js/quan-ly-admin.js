@@ -516,6 +516,8 @@ async function loadHostListFromApi() {
   syncActiveHost();
   saveState();
   renderHostSelect();
+  // Đã khôi phục loadHostUsageList() theo yêu cầu — cần chạy authorize() 1 lần trong
+  // Apps Script editor để cấp quyền UrlFetchApp trước khi dùng (xem hướng dẫn kèm theo).
   if (ACTIVE_HOST_IS_CONFIGURED) loadHostUsageList(HOST_LIST.map((h) => h.id));
 }
 function renderHostStatus() {
@@ -529,9 +531,8 @@ function renderHostStatus() {
     ' <span style="color:#666">(dùng chung cho cả bài ôn luyện và bài kiểm tra)</span>';
   hostStatusEl.className = "log show";
   const usage = active ? HOST_USAGE_BY_ID[active.id] : null;
-  // LƯU Ý: GitHub không có API "bandwidth đã dùng" như Netlify, nên không còn cảnh báo
-  // %-băng-thông (critical/warn) như trước — chỉ hiển thị dung lượng repo + rate limit
-  // API còn lại của token làm thông tin tham khảo.
+  // GitHub không có API "bandwidth đã dùng" như Netlify, nên hiển thị dung lượng repo (KB)
+  // + rate limit API còn lại của token làm thông tin tham khảo, thay cho %-băng-thông cũ.
   if (usage && (usage.repoSizeKb != null || usage.rateLimit)) {
     if (usage.repoSizeKb != null)
       html += "<br>📦 Dung lượng repo: <b>" + formatUsageBytes(usage.repoSizeKb * 1024) + "</b>";
@@ -547,7 +548,7 @@ function renderHostStatus() {
     html +=
       '<br><span style="color:#9f1c19;font-size:12.5px;">⚠️ Không lấy được số liệu usage (' +
       escapeHtml(usage.error) +
-      '). Có thể do chưa deploy Cloud Function "hostUsage", hoặc host này ' +
+      '). Có thể do chưa authorize UrlFetchApp trong Apps Script, hoặc host này ' +
       "chưa được cấu hình đúng token/owner/repo.</span>";
     hostStatusEl.style.background = "";
     hostStatusEl.style.color = "";
