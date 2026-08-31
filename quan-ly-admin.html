@@ -42,13 +42,11 @@
       ảnh đó để copy lại bất cứ lúc nào.
     </p><div class="actions" style="align-items:center;gap:8px;flex-wrap:wrap"><label class="btn btn-ghost" style="cursor:pointer;">
         📤 Chọn ảnh...
-        <input type="file" id="questionImageInput" accept="image/*" multiple style="display:none"></label><button class="btn btn-ghost" id="clearQuestionImagesBtn">🗑️ Xoá khỏi danh sách (máy này)</button><label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="shareImageAllHosts" checked>
-        Đẩy ảnh lên cả 6 cấp độ (dùng chung)
-      </label><span id="questionImageCount" class="hint" style="margin:0;"></span></div><div id="questionImageList" style="display:flex;flex-direction:column;gap:8px;margin-top:12px;"></div><div class="hint" style="margin-top:8px;">
+        <input type="file" id="questionImageInput" accept="image/*" multiple style="display:none"></label><button class="btn btn-ghost" id="clearQuestionImagesBtn">🗑️ Xoá khỏi danh sách (máy này)</button><span id="questionImageCount" class="hint" style="margin:0;"></span></div><div id="questionImageList" style="display:flex;flex-direction:column;gap:8px;margin-top:12px;"></div><div class="hint" style="margin-top:8px;">
       Đường dẫn phải nằm trong thư mục <code>image/</code> (bắt buộc, do quy định phía server), tên file chỉ nên
-      dùng chữ, số, dấu gạch ngang/gạch dưới — không dấu, không khoảng trắng. Ảnh đã đẩy lên GitHub trước đó (của
-      các bộ khác) sẽ KHÔNG bị mất khi bạn chỉ upload thêm ảnh mới ở đây. Bỏ chọn "dùng chung 6 cấp độ" nếu ảnh
-      chỉ dùng riêng cho host đang chọn ở mục "🌐 Chọn Host" phía trên.
+      dùng chữ, số, dấu gạch ngang/gạch dưới — không dấu, không khoảng trắng. Ảnh giờ chỉ đẩy lên GitHub <b>1 lần
+      duy nhất</b>, vào kho ảnh dùng chung, rồi phục vụ qua CDN (jsDelivr) — dùng được ở cả 6 cấp độ, không phụ
+      thuộc host đang chọn ở mục "🌐 Chọn Host" phía trên.
     </div><h3 style="margin:18px 0 8px;font-size:15px;">📚 Ảnh dùng chung đã có trên hệ thống (mọi máy đều thấy)</h3><div id="sharedQuestionImageList" style="display:flex;flex-direction:column;gap:6px;"></div></div><div class="card" id="cardClearData"><h2>💾 Lưu trữ tạm trong trình duyệt</h2><p class="desc">
       Xóa hết bộ nhớ tạm.
     </p><button class="btn btn-danger" id="resetLocalBtn">🗑️ Xoá dữ liệu tạm &amp; nạp lại ngân hàng gốc</button></div><div class="card" id="cardQuestionBank" style="display:none" data-role="teamgv-only"><h2>📚 Ngân hàng câu hỏi <span class="stat-pill subjectBadge" style="font-size:11px;padding:4px 10px;"></span></h2><p class="desc">

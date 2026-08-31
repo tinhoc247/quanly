@@ -1909,15 +1909,13 @@ function makeThumbnailBase64(dataUrl, maxDim) {
     }
   });
 }
-function getTargetHostIdsForImageUpload() {
-  const shareAllEl = document.getElementById("shareImageAllHosts");
-  const shareAll = shareAllEl ? shareAllEl.checked : true;
-  if (shareAll) return HOST_LIST.map((h) => h.id);
-  return [ACTIVE_HOST_ID];
-}
-async function deployImageToSingleHost(hostId, img) {
+// Ảnh giờ chỉ đẩy vào ĐÚNG 1 "kho ảnh dùng chung" (server tự chọn host có
+// isImagesHost === true), phục vụ qua jsDelivr CDN — không còn nhân bản ra từng host
+// nữa. hostId gửi kèm chỉ cần là 1 giá trị hợp lệ (server bỏ qua với request chỉ có
+// ảnh), nên cứ dùng ACTIVE_HOST_ID cho tiện.
+async function deployImageToSingleHost(img) {
   await callAdminApi("deploy-site", {
-    hostId: hostId,
+    hostId: ACTIVE_HOST_ID || "shared-images",
     images: [{ path: img.path, base64: img.base64 }],
   });
 }
@@ -1929,7 +1927,6 @@ function uploadQuestionImageEverywhere(img) {
   return result;
 }
 async function uploadQuestionImageEverywhereInner(img) {
-  const hostIds = getTargetHostIdsForImageUpload();
   img.uploadState = "uploading";
   img.uploadedHosts = Array.isArray(img.uploadedHosts) ? img.uploadedHosts : [];
   img.uploadError = "";
@@ -1937,36 +1934,22 @@ async function uploadQuestionImageEverywhereInner(img) {
   try {
     await HOST_SYNC_PROMISE;
   } catch (err) {}
-  const pendingHostIds = hostIds.filter(
-    (hostId) => !img.uploadedHosts.includes(hostId),
-  );
-  const uploadErrors = [];
-  await Promise.all(
-    pendingHostIds.map(async (hostId) => {
+  if (!img.uploadedHosts.includes("shared")) {
+    try {
+      await deployImageToSingleHost(img);
+      img.uploadedHosts = ["shared"];
+    } catch (err) {
       try {
-        await deployImageToSingleHost(hostId, img);
-        img.uploadedHosts.push(hostId);
-      } catch (err) {
-        try {
-          await new Promise((r) => setTimeout(r, 1200));
-          await deployImageToSingleHost(hostId, img);
-          img.uploadedHosts.push(hostId);
-        } catch (err2) {
-          uploadErrors.push(`${hostId}: ${err2.message}`);
-        }
+        await new Promise((r) => setTimeout(r, 1200));
+        await deployImageToSingleHost(img);
+        img.uploadedHosts = ["shared"];
+      } catch (err2) {
+        img.uploadError = err2.message;
       }
-      renderQuestionImageList();
-    }),
-  );
-  if (uploadErrors.length)
-    img.uploadError =
-      (img.uploadError ? img.uploadError + "; " : "") + uploadErrors.join("; ");
-  img.uploadState =
-    img.uploadedHosts.length === hostIds.length
-      ? "done"
-      : img.uploadedHosts.length > 0
-        ? "partial"
-        : "error";
+    }
+    renderQuestionImageList();
+  }
+  img.uploadState = img.uploadedHosts.length ? "done" : "error";
   qimgDbPut(img);
   if (img.uploadedHosts.length && !img.autoCopiedOnce) {
     img.autoCopiedOnce = true;
