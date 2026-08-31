@@ -570,3 +570,17 @@ function actionHostUsage_(body) {
   });
   return { status: "ok", data: data };
 }
+
+// ---------------------------------------------------------------------------
+// authorize() — KHÔNG được gọi bởi web app, chỉ để BẠN chạy TAY 1 LẦN ngay trong
+// trình soạn thảo Apps Script (chọn tên hàm "authorize" ở thanh trên cùng → bấm nút
+// ▶ Run). Việc này ép Google hiện màn hình xin cấp quyền đầy đủ cho script, trong đó
+// có quyền "Kết nối tới một dịch vụ bên ngoài" (UrlFetchApp) — quyền còn thiếu gây ra
+// lỗi "You do not have permission to call UrlFetchApp.fetch". Sau khi chạy xong (bấm
+// Allow ở hộp thoại xin quyền), vào Deploy → Manage deployments → bút chì → New version
+// → Deploy để bản đang chạy áp dụng quyền mới. Chạy xong có thể xoá hàm này nếu muốn,
+// không ảnh hưởng gì đến các action khác.
+function authorize() {
+  var res = UrlFetchApp.fetch("https://api.github.com", { muteHttpExceptions: true });
+  Logger.log("Authorize OK, GitHub API trả về HTTP " + res.getResponseCode());
+}

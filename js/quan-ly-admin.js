@@ -548,8 +548,9 @@ function renderHostStatus() {
     html +=
       '<br><span style="color:#9f1c19;font-size:12.5px;">⚠️ Không lấy được số liệu usage (' +
       escapeHtml(usage.error) +
-      '). Có thể do chưa authorize UrlFetchApp trong Apps Script, hoặc host này ' +
-      "chưa được cấu hình đúng token/owner/repo.</span>";
+      '). Có thể do chưa chạy hàm authorize() trong Apps Script editor (chọn "authorize" ở ' +
+      "thanh Select function → bấm ▶ Run → Allow → rồi Deploy > Manage deployments > New " +
+      "version), hoặc host này chưa được cấu hình đúng token/owner/repo.</span>";
     hostStatusEl.style.background = "";
     hostStatusEl.style.color = "";
   } else {
@@ -1908,15 +1909,13 @@ function makeThumbnailBase64(dataUrl, maxDim) {
     }
   });
 }
-function getTargetHostIdsForImageUpload() {
-  const shareAllEl = document.getElementById("shareImageAllHosts");
-  const shareAll = shareAllEl ? shareAllEl.checked : true;
-  if (shareAll) return HOST_LIST.map((h) => h.id);
-  return [ACTIVE_HOST_ID];
-}
-async function deployImageToSingleHost(hostId, img) {
+// Ảnh giờ chỉ đẩy vào ĐÚNG 1 "kho ảnh dùng chung" (server tự chọn host có
+// isImagesHost === true), phục vụ qua jsDelivr CDN — không còn nhân bản ra từng host
+// nữa. hostId gửi kèm chỉ cần là 1 giá trị hợp lệ (server bỏ qua với request chỉ có
+// ảnh), nên cứ dùng ACTIVE_HOST_ID cho tiện.
+async function deployImageToSingleHost(img) {
   await callAdminApi("deploy-site", {
-    hostId: hostId,
+    hostId: ACTIVE_HOST_ID || "shared-images",
     images: [{ path: img.path, base64: img.base64 }],
   });
 }
@@ -1928,7 +1927,6 @@ function uploadQuestionImageEverywhere(img) {
   return result;
 }
 async function uploadQuestionImageEverywhereInner(img) {
-  const hostIds = getTargetHostIdsForImageUpload();
   img.uploadState = "uploading";
   img.uploadedHosts = Array.isArray(img.uploadedHosts) ? img.uploadedHosts : [];
   img.uploadError = "";
@@ -1936,36 +1934,22 @@ async function uploadQuestionImageEverywhereInner(img) {
   try {
     await HOST_SYNC_PROMISE;
   } catch (err) {}
-  const pendingHostIds = hostIds.filter(
-    (hostId) => !img.uploadedHosts.includes(hostId),
-  );
-  const uploadErrors = [];
-  await Promise.all(
-    pendingHostIds.map(async (hostId) => {
+  if (!img.uploadedHosts.includes("shared")) {
+    try {
+      await deployImageToSingleHost(img);
+      img.uploadedHosts = ["shared"];
+    } catch (err) {
       try {
-        await deployImageToSingleHost(hostId, img);
-        img.uploadedHosts.push(hostId);
-      } catch (err) {
-        try {
-          await new Promise((r) => setTimeout(r, 1200));
-          await deployImageToSingleHost(hostId, img);
-          img.uploadedHosts.push(hostId);
-        } catch (err2) {
-          uploadErrors.push(`${hostId}: ${err2.message}`);
-        }
+        await new Promise((r) => setTimeout(r, 1200));
+        await deployImageToSingleHost(img);
+        img.uploadedHosts = ["shared"];
+      } catch (err2) {
+        img.uploadError = err2.message;
       }
-      renderQuestionImageList();
-    }),
-  );
-  if (uploadErrors.length)
-    img.uploadError =
-      (img.uploadError ? img.uploadError + "; " : "") + uploadErrors.join("; ");
-  img.uploadState =
-    img.uploadedHosts.length === hostIds.length
-      ? "done"
-      : img.uploadedHosts.length > 0
-        ? "partial"
-        : "error";
+    }
+    renderQuestionImageList();
+  }
+  img.uploadState = img.uploadedHosts.length ? "done" : "error";
   qimgDbPut(img);
   if (img.uploadedHosts.length && !img.autoCopiedOnce) {
     img.autoCopiedOnce = true;
@@ -4866,92 +4850,6 @@ if (clearQuestionImagesBtnEl)
 renderQuestionImageList();
 loadQuestionImagesFromIndexedDB();
 loadSharedQuestionImagesRegistry();
-async function importOldHostsAndEmails() {
-  const logId = "importOldDataLog";
-  setLog(
-    logId,
-    "info",
-    "⏳ Đang đọc dữ liệu cũ từ Google Sheet (HostSync + EmailScriptsSync)...",
-  );
-  let oldHosts = [],
-    oldEmails = [];
-  try {
-    [oldHosts, oldEmails] = await Promise.all([
-      fetchHostSheetJSONP_LEGACY(),
-      fetchEmailSheetJSONP_LEGACY(),
-    ]);
-  } catch (err) {
-    setLog(
-      logId,
-      "err",
-      "❌ Không đọc được dữ liệu từ Google Sheet: " + err.message,
-    );
-    return;
-  }
-  if (!oldHosts.length && !oldEmails.length) {
-    setLog(
-      logId,
-      "err",
-      "Google Sheet không có dòng host/mail hợp lệ nào để import.",
-    );
-    return;
-  }
-  setLog(
-    logId,
-    "info",
-    `⏳ Đang ghi ${oldHosts.length} host + ${oldEmails.length} mail vào Firestore...`,
-  );
-  let okHost = 0,
-    okEmail = 0;
-  const failList = [];
-  for (const h of oldHosts)
-    try {
-      await adminSave(
-        "hosts",
-        { label: h.label, token: h.token, owner: h.owner, repo: h.repo, branch: h.branch, pagesUrl: h.pagesUrl },
-        h.id,
-      );
-      okHost++;
-    } catch (err) {
-      failList.push(`host "${h.label}": ${err.message}`);
-    }
-  for (const e of oldEmails)
-    try {
-      await adminSave("emails", { label: e.label, url: e.url }, e.id);
-      okEmail++;
-    } catch (err) {
-      failList.push(`mail "${e.label}": ${err.message}`);
-    }
-  const summary = `✅ Đã import ${okHost}/${oldHosts.length} host và ${okEmail}/${oldEmails.length} mail vào Firestore.`;
-  if (failList.length)
-    setLog(
-      logId,
-      "err",
-      summary +
-        `\n⚠️ ${failList.length} mục bị lỗi:\n- ` +
-        failList.join("\n- "),
-    );
-  else {
-    setLog(
-      logId,
-      "ok",
-      summary + `\nBấm "🔄 Tải lại danh sách" ở 2 mục phía trên để xác nhận.`,
-    );
-    loadHostListFromApi();
-    loadEmailListFromApi();
-  }
-}
-const importOldDataBtn = document.getElementById("importOldDataBtn");
-if (importOldDataBtn)
-  importOldDataBtn.onclick = () => {
-    if (
-      !confirm(
-        "Đọc toàn bộ host + mail từ Google Sheet hiện tại rồi ghi (merge) vào Firestore?\nCó thể chạy lại nhiều lần an toàn.",
-      )
-    )
-      return;
-    importOldHostsAndEmails();
-  };
 loadEmailListFromApi();
 loadHostListFromApi();
 document.querySelectorAll(".card").forEach((card) => {
