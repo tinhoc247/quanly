@@ -1,0 +1,7 @@
+# Node / Firebase Functions
+functions/node_modules/
+.firebase/
+firebase-debug.log
+
+# Editor/OS junk
+.DS_Store
