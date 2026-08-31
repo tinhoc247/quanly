@@ -79,26 +79,6 @@ function buildPagesUrl({ owner, repo, pagesUrl }, path) {
   return base + "/" + cleanPath;
 }
 
-// URL CDN (jsDelivr) cho 1 file trong repo — dùng cho "kho ảnh dùng chung": ảnh chỉ
-// đẩy lên GitHub 1 LẦN (vào đúng repo ảnh dùng chung), rồi phục vụ qua jsDelivr thay
-// vì GitHub Pages — jsDelivr miễn phí, không giới hạn băng thông, có CDN toàn cầu, và
-// không phụ thuộc/tốn quota Pages của bất kỳ host thi nào.
-function buildJsdelivrUrl({ owner, repo, branch }, path) {
-  const cleanPath = String(path || "").replace(/^\/+/, "");
-  return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch || "main"}/${cleanPath}`;
-}
-
-// Xoá cache jsDelivr cho 1 file (gọi sau khi xoá file đó khỏi GitHub, vì jsDelivr cache
-// vĩnh viễn — không tự nhận biết file gốc đã bị xoá/đổi nếu không purge thủ công).
-// Best-effort: lỗi purge không nên chặn luồng xoá chính (file đã xoá khỏi GitHub rồi).
-async function purgeJsdelivr({ owner, repo, branch }, path) {
-  const cleanPath = String(path || "").replace(/^\/+/, "");
-  const url = `https://purge.jsdelivr.net/gh/${owner}/${repo}@${branch || "main"}/${cleanPath}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Purge jsDelivr thất bại cho "${path}" (HTTP ${res.status}).`);
-  return res.json().catch(() => ({}));
-}
-
 // Thông tin repo (dùng cho host-usage.js): size (KB, ước lượng dung lượng repo) +
 // rate limit còn lại của token — GitHub KHÔNG có API "bandwidth đã dùng" như Netlify,
 // nên đây là số liệu GẦN ĐÚNG NHẤT có thể lấy được, không phải bandwidth thật.
@@ -114,4 +94,4 @@ async function getRateLimit(token) {
   return res.json();
 }
 
-module.exports = { getFileSha, putFile, deleteFile, buildPagesUrl, buildJsdelivrUrl, purgeJsdelivr, getRepoInfo, getRateLimit };
+module.exports = { getFileSha, putFile, deleteFile, buildPagesUrl, getRepoInfo, getRateLimit };

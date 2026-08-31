@@ -239,52 +239,24 @@ exports.deploySite = onRequest({ region: REGION, secrets: [ADMIN_KEY], timeoutSe
       }
     }
 
-    const db = getDb();
-
-    // HTML export vẫn đẩy theo đúng host được chọn (hostId) như trước — không đổi.
-    let hostData = null;
-    if (hasHtml) {
-      try {
-        const snap = await db.collection("hosts").doc(hostId).get();
-        if (!snap.exists) return jsonResponse(res, 404, { status: "error", message: `Không tìm thấy host "${hostId}" trong Firestore.` });
-        hostData = snap.data();
-      } catch (err) {
-        return jsonResponse(res, 500, { status: "error", message: "Lỗi đọc Firestore: " + err.message });
-      }
-      if (!hostData || !hostData.token || !hostData.owner || !hostData.repo) {
-        return jsonResponse(res, 500, {
-          status: "error",
-          message: `Host "${hostId}" thiếu token/owner/repo trong Firestore (cấu trúc host đã đổi sang GitHub — cần { token: GitHub PAT, owner, repo, branch }).`,
-        });
-      }
+    // Đọc token/owner/repo/branch của host này từ Firestore.
+    let hostData;
+    try {
+      const db = getDb();
+      const snap = await db.collection("hosts").doc(hostId).get();
+      if (!snap.exists) return jsonResponse(res, 404, { status: "error", message: `Không tìm thấy host "${hostId}" trong Firestore.` });
+      hostData = snap.data();
+    } catch (err) {
+      return jsonResponse(res, 500, { status: "error", message: "Lỗi đọc Firestore: " + err.message });
     }
 
-    // Ảnh (nếu có) LUÔN đẩy vào ĐÚNG 1 repo "kho ảnh dùng chung" duy nhất — đánh dấu
-    // bằng field isImagesHost === true trên 1 document trong collection "hosts" —
-    // rồi phục vụ qua jsDelivr CDN. Thay cho cách cũ là đẩy lặp lại ảnh lên TỪNG host
-    // (mỗi ảnh trước đây tốn N lần PUT + N lần dung lượng repo, giờ chỉ 1 lần).
-    let imagesHostData = null;
-    let imagesHostId = null;
-    if (imgList.length || delList.length) {
-      try {
-        const snap = await db.collection("hosts").where("isImagesHost", "==", true).limit(1).get();
-        if (snap.empty) {
-          return jsonResponse(res, 500, {
-            status: "error",
-            message: 'Chưa cấu hình "kho ảnh dùng chung": cần đánh dấu 1 host trong Firestore (collection "hosts") với field isImagesHost = true.',
-          });
-        }
-        imagesHostId = snap.docs[0].id;
-        imagesHostData = snap.docs[0].data();
-      } catch (err) {
-        return jsonResponse(res, 500, { status: "error", message: "Lỗi đọc Firestore (kho ảnh dùng chung): " + err.message });
-      }
-      if (!imagesHostData || !imagesHostData.token || !imagesHostData.owner || !imagesHostData.repo) {
-        return jsonResponse(res, 500, {
-          status: "error",
-          message: `Host ảnh dùng chung "${imagesHostId}" thiếu token/owner/repo trong Firestore.`,
-        });
-      }
+    const { token, owner, repo, branch: rawBranch, pagesUrl } = hostData || {};
+    const branch = rawBranch || "main";
+    if (!token || !owner || !repo) {
+      return jsonResponse(res, 500, {
+        status: "error",
+        message: `Host "${hostId}" thiếu token/owner/repo trong Firestore (cấu trúc host đã đổi sang GitHub — cần { token: GitHub PAT, owner, repo, branch }).`,
+      });
     }
 
     const safeFileName = sanitizeFileName(fileName);
@@ -294,37 +266,24 @@ exports.deploySite = onRequest({ region: REGION, secrets: [ADMIN_KEY], timeoutSe
     // "toàn bộ site" như Netlify snapshot deploy).
     let fileUrl = null;
     if (hasHtml) {
-      const { token, owner, repo, branch: rawBranch, pagesUrl } = hostData;
-      const branch = rawBranch || "main";
       const buf = Buffer.from(htmlContent, "utf8");
       await github.putFile(owner, repo, branch, htmlPath, buf.toString("base64"), token, `Cập nhật ${htmlPath} (quan-ly-admin)`);
       fileUrl = github.buildPagesUrl({ owner, repo, pagesUrl }, htmlPath);
     }
-    if (imgList.length) {
-      const { token, owner, repo, branch: rawBranch } = imagesHostData;
-      const branch = rawBranch || "main";
-      for (const im of imgList) {
-        const path = sanitizeImagePath(im.path);
-        await github.putFile(owner, repo, branch, path, im.base64, token, `Cập nhật ảnh ${path} (quan-ly-admin)`);
-        if (!fileUrl) fileUrl = github.buildJsdelivrUrl({ owner, repo, branch }, path);
-      }
+    for (const im of imgList) {
+      const path = sanitizeImagePath(im.path);
+      await github.putFile(owner, repo, branch, path, im.base64, token, `Cập nhật ảnh ${path} (quan-ly-admin)`);
+      if (!fileUrl) fileUrl = github.buildPagesUrl({ owner, repo, pagesUrl }, path);
     }
 
-    // Xoá ảnh (nếu có yêu cầu) khỏi kho ảnh dùng chung, purge cache jsDelivr, rồi dọn
-    // document Firestore "questionImages" tương ứng.
+    // Xoá ảnh (nếu có yêu cầu) + dọn document Firestore "questionImages" tương ứng.
     const deletedPaths = [];
     const deleteErrors = [];
     if (delList.length) {
-      const { token, owner, repo, branch: rawBranch } = imagesHostData;
-      const branch = rawBranch || "main";
+      const db = getDb();
       for (const del of delList) {
         try {
           await github.deleteFile(owner, repo, branch, del.ghPath, token, `Xoá ${del.ghPath} (quan-ly-admin)`);
-          try {
-            await github.purgeJsdelivr({ owner, repo, branch }, del.ghPath);
-          } catch (purgeErr) {
-            console.warn(`Purge jsDelivr thất bại cho "${del.ghPath}":`, purgeErr.message);
-          }
           await db.collection("questionImages").doc(del.docId).delete();
           deletedPaths.push(del.raw);
         } catch (err) {
@@ -335,7 +294,7 @@ exports.deploySite = onRequest({ region: REGION, secrets: [ADMIN_KEY], timeoutSe
 
     return jsonResponse(res, 200, {
       status: "ok",
-      url: fileUrl || (hostData ? github.buildPagesUrl({ owner: hostData.owner, repo: hostData.repo, pagesUrl: hostData.pagesUrl }, "") : ""),
+      url: fileUrl || github.buildPagesUrl({ owner, repo, pagesUrl }, ""),
       deletedPaths,
       deleteErrors,
     });
