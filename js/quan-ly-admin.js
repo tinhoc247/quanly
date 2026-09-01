@@ -2222,17 +2222,19 @@ function copyTextToClipboard(text, successMsg) {
     });
 }
 function questionImageUploadBadge(img) {
-  const hostCount = HOST_LIST.length || 1;
   if (img.uploadState === "uploading")
     return '<span style="color:#8a6d00;">⏳ Đang đẩy lên GitHub...</span>';
   if (Array.isArray(img.uploadedHosts) && img.uploadedHosts.includes("external"))
     return '<span style="color:#1f9d55;">🔗 Dùng link ảnh ngoài (không upload)</span>';
+  // Từ khi chuyển sang "1 kho ảnh dùng chung + jsDelivr CDN", ảnh chỉ cần đẩy lên
+  // ĐÚNG 1 nơi (repo ảnh) là TẤT CẢ các site/host khác đã đọc được ngay qua URL CDN
+  // chung — không còn kiểu "đẩy lặp lại ảnh vào từng host" như hệ thống cũ nữa. Vì
+  // vậy không hiển thị "x/8 host" (dễ hiểu lầm là còn thiếu 7 host khác) — chỉ cần
+  // báo "đã lên kho ảnh dùng chung" là đủ, các host khác luôn đọc được ảnh này.
   if (img.uploadState === "done")
-    return `<span style="color:#1f9d55;">✅ Đã lên ${img.uploadedHosts.length}/${hostCount} host</span>`;
-  if (img.uploadState === "partial")
-    return `<span style="color:#b00020;" title="${escapeHtml(img.uploadError)}">⚠️ Mới lên ${img.uploadedHosts.length}/${hostCount} host, còn lỗi</span>`;
-  if (img.uploadState === "error")
-    return `<span style="color:#b00020;" title="${escapeHtml(img.uploadError)}">❌ Chưa lên được host nào</span>`;
+    return '<span style="color:#1f9d55;">✅ Đã lên kho ảnh dùng chung (mọi host đều đọc được)</span>';
+  if (img.uploadState === "partial" || img.uploadState === "error")
+    return `<span style="color:#b00020;" title="${escapeHtml(img.uploadError)}">❌ Chưa đẩy lên được kho ảnh dùng chung</span>`;
   return '<span style="color:var(--text-mute);">Chưa đẩy lên</span>';
 }
 function renderQuestionImageList() {
