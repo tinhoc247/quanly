@@ -265,25 +265,36 @@ exports.deploySite = onRequest({ region: REGION, secrets: [ADMIN_KEY], timeoutSe
     // (mỗi ảnh trước đây tốn N lần PUT + N lần dung lượng repo, giờ chỉ 1 lần).
     let imagesHostData = null;
     let imagesHostId = null;
-    if (imgList.length || delList.length) {
+    const mustHaveImagesHost = imgList.length || delList.length; // upload/xoá ảnh -> bắt buộc phải có kho ảnh
+    const wantsImagesHost = mustHaveImagesHost || hasHtml; // deploy HTML -> chỉ "muốn có" để viết lại đường dẫn ảnh, không bắt buộc
+    if (wantsImagesHost) {
       try {
         const snap = await db.collection("hosts").where("isImagesHost", "==", true).limit(1).get();
-        if (snap.empty) {
+        if (!snap.empty) {
+          imagesHostId = snap.docs[0].id;
+          imagesHostData = snap.docs[0].data();
+        } else if (mustHaveImagesHost) {
           return jsonResponse(res, 500, {
             status: "error",
             message: 'Chưa cấu hình "kho ảnh dùng chung": cần đánh dấu 1 host trong Firestore (collection "hosts") với field isImagesHost = true.',
           });
         }
-        imagesHostId = snap.docs[0].id;
-        imagesHostData = snap.docs[0].data();
+        // Trường hợp chỉ deploy HTML (không upload/xoá ảnh) và chưa cấu hình kho ảnh
+        // dùng chung: bỏ qua, không lỗi — HTML vẫn đẩy lên bình thường, chỉ là ảnh
+        // trong đó (nếu có) sẽ giữ nguyên đường dẫn tương đối "image/..." như cũ.
       } catch (err) {
-        return jsonResponse(res, 500, { status: "error", message: "Lỗi đọc Firestore (kho ảnh dùng chung): " + err.message });
+        if (mustHaveImagesHost) {
+          return jsonResponse(res, 500, { status: "error", message: "Lỗi đọc Firestore (kho ảnh dùng chung): " + err.message });
+        }
       }
-      if (!imagesHostData || !imagesHostData.token || !imagesHostData.owner || !imagesHostData.repo) {
-        return jsonResponse(res, 500, {
-          status: "error",
-          message: `Host ảnh dùng chung "${imagesHostId}" thiếu token/owner/repo trong Firestore.`,
-        });
+      if (imagesHostData && (!imagesHostData.token || !imagesHostData.owner || !imagesHostData.repo)) {
+        if (mustHaveImagesHost) {
+          return jsonResponse(res, 500, {
+            status: "error",
+            message: `Host ảnh dùng chung "${imagesHostId}" thiếu token/owner/repo trong Firestore.`,
+          });
+        }
+        imagesHostData = null; // thiếu thông tin -> không dùng để viết lại đường dẫn được, bỏ qua
       }
     }
 
@@ -296,7 +307,20 @@ exports.deploySite = onRequest({ region: REGION, secrets: [ADMIN_KEY], timeoutSe
     if (hasHtml) {
       const { token, owner, repo, branch: rawBranch, pagesUrl } = hostData;
       const branch = rawBranch || "main";
-      const buf = Buffer.from(htmlContent, "utf8");
+
+      // Viết lại mọi tham chiếu "image/..." (trong thẻ <img src="image/...">, và cả
+      // trong dữ liệu câu hỏi dạng JSON nhúng sẵn trong trang, ví dụ {"image":"image/xxx.png"})
+      // thành URL jsDelivr tuyệt đối trỏ về ĐÚNG kho ảnh dùng chung — để ảnh hiển thị
+      // được dù trang HTML này đang được host ở repo nào (không nhất thiết trùng
+      // repo chứa ảnh). Nếu chưa cấu hình kho ảnh dùng chung, giữ nguyên như cũ.
+      let finalHtmlContent = htmlContent;
+      if (imagesHostData) {
+        const imgBranch = imagesHostData.branch || "main";
+        const jsdelivrBase = `https://cdn.jsdelivr.net/gh/${imagesHostData.owner}/${imagesHostData.repo}@${imgBranch}/`;
+        finalHtmlContent = finalHtmlContent.replace(/(["'])image\//g, `$1${jsdelivrBase}image/`);
+      }
+
+      const buf = Buffer.from(finalHtmlContent, "utf8");
       await github.putFile(owner, repo, branch, htmlPath, buf.toString("base64"), token, `Cập nhật ${htmlPath} (quan-ly-admin)`);
       fileUrl = github.buildPagesUrl({ owner, repo, pagesUrl }, htmlPath);
     }
