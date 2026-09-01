@@ -1008,23 +1008,57 @@ function pickQuestionSets() {
 }
 const QUIZ_COLLECTION = "quizzes";
 const QUIZ_DOC_ID = "ngan-hang-cau-hoi";
+// Firestore console báo "Array of ~N is too large to display" khi 1 document chứa
+// nguyên mảng "list" hàng nghìn câu hỏi. Để tránh cảnh báo này (và để mỗi document
+// gọn nhẹ hơn), mảng câu hỏi được CHIA thành nhiều document con, mỗi document chứa
+// tối đa QUIZ_CHUNK_SIZE câu, đặt tên nối tiếp "<baseDocId>__p1", "__p2", ...
+const QUIZ_CHUNK_SIZE = 400;
 function getQuizDocId(subjectId) {
   return subjectId === SUBJECTS[0].id
     ? QUIZ_DOC_ID
     : QUIZ_DOC_ID + "-" + subjectId;
 }
+function getQuizChunkDocId(baseDocId, partIndex) {
+  return `${baseDocId}__p${partIndex}`;
+}
 async function loadQuestionsFromApi(subjectId) {
   const targetSubject = subjectId || ACTIVE_SUBJECT;
-  const docId = getQuizDocId(targetSubject);
+  const baseDocId = getQuizDocId(targetSubject);
   const statusEl = document.getElementById("quizFirebaseStatus");
   if (statusEl && targetSubject === ACTIVE_SUBJECT)
     statusEl.innerHTML = `⏳ Đang tải ngân hàng câu hỏi môn ${subjectLabel(targetSubject)} từ Firebase...`;
   try {
-    const doc = await adminLoad(QUIZ_COLLECTION, docId);
-    const list = Array.isArray(doc && doc.list) ? doc.list : null;
+    // Đọc lần lượt từng phần "__p1", "__p2", ... cho tới khi gặp phần rỗng/không
+    // tồn tại thì dừng, rồi nối lại thành 1 mảng câu hỏi đầy đủ.
+    let list = [];
+    let partIndex = 1;
+    while (true) {
+      const partDocId = getQuizChunkDocId(baseDocId, partIndex);
+      let doc;
+      try {
+        doc = await adminLoad(QUIZ_COLLECTION, partDocId);
+      } catch (e) {
+        break; // hết phần (document không tồn tại) -> dừng vòng lặp
+      }
+      const partList = Array.isArray(doc && doc.list) ? doc.list : [];
+      if (partList.length === 0) break;
+      list = list.concat(partList);
+      partIndex++;
+    }
+    // Tương thích ngược: nếu chưa từng chia phần (dữ liệu cũ còn nằm nguyên ở
+    // document gốc, chưa có "__p1"), thử đọc document gốc như trước.
+    if (list.length === 0) {
+      const legacyDoc = await adminLoad(QUIZ_COLLECTION, baseDocId).catch(
+        () => null,
+      );
+      const legacyList = Array.isArray(legacyDoc && legacyDoc.list)
+        ? legacyDoc.list
+        : null;
+      if (legacyList && legacyList.length) list = legacyList;
+    }
     if (!list || list.length === 0)
       throw new Error(
-        `Chưa có dữ liệu tại collection "${QUIZ_COLLECTION}" / document "${docId}" (thử bấm "📤 Đẩy toàn bộ câu hỏi đang có lên Firebase" để tạo lần đầu).`,
+        `Chưa có dữ liệu tại collection "${QUIZ_COLLECTION}" / document "${baseDocId}__p1" (thử bấm "📤 Đẩy toàn bộ câu hỏi đang có lên Firebase" để tạo lần đầu).`,
       );
     QUIZ_BY_SUBJECT[targetSubject] = list;
     QUIZ_LOADED_SUBJECTS.add(targetSubject);
@@ -1049,13 +1083,47 @@ async function loadQuestionsFromApi(subjectId) {
 }
 async function pushQuestionsToFirestore(questions, docId) {
   const targetDocId = docId || getQuizDocId(ACTIVE_SUBJECT);
+  const chunks = [];
+  for (let i = 0; i < questions.length; i += QUIZ_CHUNK_SIZE) {
+    chunks.push(questions.slice(i, i + QUIZ_CHUNK_SIZE));
+  }
+  if (chunks.length === 0) chunks.push([]); // vẫn ghi ít nhất 1 phần rỗng nếu danh sách trống
   try {
-    await adminSave(QUIZ_COLLECTION, { list: questions }, targetDocId);
+    for (let i = 0; i < chunks.length; i++) {
+      await adminSave(
+        QUIZ_COLLECTION,
+        { list: chunks[i] },
+        getQuizChunkDocId(targetDocId, i + 1),
+      );
+    }
+    // Ghi thêm 1 phần rỗng ngay sau phần cuối cùng, để "chặn" các phần dư còn sót
+    // lại từ lần lưu trước (nếu lần lưu trước có nhiều phần hơn lần này) -- vòng lặp
+    // đọc ở loadQuestionsFromApi sẽ dừng ngay khi gặp phần rỗng này.
+    await adminSave(
+      QUIZ_COLLECTION,
+      { list: [] },
+      getQuizChunkDocId(targetDocId, chunks.length + 1),
+    );
+    // Dọn rỗng document GỐC (không có hậu tố "__pN") — đây là document đời cũ, từ
+    // trước khi có cơ chế chia phần, có thể vẫn còn giữ nguyên mảng "list" hàng
+    // nghìn câu hỏi (đôi khi kèm dữ liệu base64 của ảnh cũ) khiến Firebase Console
+    // báo "Array of ~N is too large to display". Từ khi có chunking, document này
+    // không còn được đọc (loadQuestionsFromApi chỉ dùng nó làm fallback khi CHƯA hề
+    // có "__p1"), nên ghi đè "list: []" vào đây là an toàn và sẽ dứt điểm cảnh báo.
+    try {
+      await adminSave(QUIZ_COLLECTION, { list: [] }, targetDocId);
+    } catch (err) {
+      console.warn(
+        `Không dọn được document gốc "${targetDocId}" (không ảnh hưởng dữ liệu, có thể bỏ qua):`,
+        err,
+      );
+    }
     return {
       ok: questions.length,
       total: questions.length,
       failList: [],
       docId: targetDocId,
+      parts: chunks.length,
     };
   } catch (err) {
     return {
@@ -1063,6 +1131,7 @@ async function pushQuestionsToFirestore(questions, docId) {
       total: questions.length,
       failList: [err.message],
       docId: targetDocId,
+      parts: 0,
     };
   }
 }
@@ -1934,7 +2003,13 @@ async function uploadQuestionImageEverywhereInner(img) {
   try {
     await HOST_SYNC_PROMISE;
   } catch (err) {}
-  if (!img.uploadedHosts.includes("shared")) {
+  // Nếu đường dẫn đã là 1 URL đầy đủ (ảnh dùng link ngoài, không phải ảnh upload
+  // qua GitHub), không có gì để đẩy lên cả — chỉ cần đánh dấu "đã xong" để lưu vào
+  // danh sách ảnh dùng chung, tránh gọi deploy-site với 1 path không hợp lệ (server
+  // sẽ sanitize hỏng URL, sinh ra file rác trên GitHub với tên be bét).
+  if (isAbsoluteImageUrl(img.path)) {
+    img.uploadedHosts = ["external"];
+  } else if (!img.uploadedHosts.includes("shared")) {
     try {
       await deployImageToSingleHost(img);
       img.uploadedHosts = ["shared"];
@@ -2096,15 +2171,26 @@ function clearQuestionImages() {
   qimgDbClear();
   renderQuestionImageList();
 }
+function isAbsoluteImageUrl(str) {
+  // Ảnh dùng link ngoài (đã host sẵn ở nơi khác, dán thẳng URL đầy đủ vào ô
+  // đường dẫn) thay vì ảnh upload-qua-GitHub thông thường (dạng "image/ten.png").
+  return /^(https?:)?\/\//i.test(str) || /^data:/i.test(str);
+}
 function updateQuestionImagePath(id, newPath) {
   const img = QUESTION_IMAGES.find((i) => i.id === id);
   if (!img) return;
   const trimmed = String(newPath || "")
     .trim()
     .replace(/^\/+/, "");
-  const finalPath = trimmed.toLowerCase().startsWith("image/")
+  // Nếu người dùng dán thẳng 1 URL đầy đủ (vd link jsDelivr của ảnh đã có sẵn) thì
+  // GIỮ NGUYÊN, không được ghép thêm tiền tố "image/" phía trước — nếu không sẽ ra
+  // đường dẫn hỏng dạng "image/https://..." (trình duyệt hiểu nhầm là đường dẫn
+  // tương đối, ảnh không tải được) và server cũng không upload/sanitize đúng được.
+  const finalPath = isAbsoluteImageUrl(trimmed)
     ? trimmed
-    : "image/" + trimmed.replace(/^image\//i, "");
+    : trimmed.toLowerCase().startsWith("image/")
+      ? trimmed
+      : "image/" + trimmed.replace(/^image\//i, "");
   const dupes = QUESTION_IMAGES.filter(
     (i) => i.id !== id && i.path === finalPath,
   );
@@ -2139,6 +2225,8 @@ function questionImageUploadBadge(img) {
   const hostCount = HOST_LIST.length || 1;
   if (img.uploadState === "uploading")
     return '<span style="color:#8a6d00;">⏳ Đang đẩy lên GitHub...</span>';
+  if (Array.isArray(img.uploadedHosts) && img.uploadedHosts.includes("external"))
+    return '<span style="color:#1f9d55;">🔗 Dùng link ảnh ngoài (không upload)</span>';
   if (img.uploadState === "done")
     return `<span style="color:#1f9d55;">✅ Đã lên ${img.uploadedHosts.length}/${hostCount} host</span>`;
   if (img.uploadState === "partial")
@@ -2492,7 +2580,7 @@ document.getElementById("pushQuizBtn").onclick = async () => {
   );
   try {
     const pushResult = await pushQuestionsToFirestore(QUIZ);
-    let msg = `🔥 Đã đẩy ${pushResult.ok}/${pushResult.total} câu lên Firebase (document "quizzes/${pushResult.docId}", môn ${subjectLabel(ACTIVE_SUBJECT)}).`;
+    let msg = `🔥 Đã đẩy ${pushResult.ok}/${pushResult.total} câu lên Firebase (document "quizzes/${pushResult.docId}__p1..${pushResult.parts || 1}", môn ${subjectLabel(ACTIVE_SUBJECT)}).`;
     if (pushResult.failList.length)
       msg +=
         `\n⚠️ ${pushResult.failList.length} câu lỗi:\n- ` +
