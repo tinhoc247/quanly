@@ -2205,7 +2205,7 @@ function updateQuestionImagePath(id, newPath) {
   uploadQuestionImageEverywhere(img);
 }
 function buildQuestionImageSnippet(path) {
-  return `<img src="${path}" class="q-pre-image">`;
+  return `<img src="${resolveQuestionImageUrl(path)}" class="q-pre-image">`;
 }
 function copyTextToClipboard(text, successMsg) {
   navigator.clipboard
@@ -4015,9 +4015,9 @@ function collectQeditFormToObject() {
     }));
     merged.answer = qeditPositionAnswerState;
   } else if (merged.type === "imagepoint") {
-    merged.image = document
-      .getElementById("qeditImgPointImagePath")
-      .value.trim();
+    merged.image = resolveQuestionImageUrl(
+      document.getElementById("qeditImgPointImagePath").value.trim(),
+    );
     merged.points = qeditImgPointState.map((pt) => {
       const p = {
         x: pt.x === "" ? 0 : Number(pt.x),
@@ -4624,7 +4624,7 @@ async function handleQeditImageUpload(file) {
             ? existing.label || ""
             : existing || "";
         qeditClassifyItemsState[targetIdx] = {
-          image: path,
+          image: resolveQuestionImageUrl(path),
           label: existingLabel,
         };
         qeditClassifyItemImageTargetIdx = null;
@@ -4644,7 +4644,7 @@ async function handleQeditImageUpload(file) {
             ? existing.label || ""
             : existing || "";
         qeditClassifyDistractorsState[targetIdx] = {
-          image: path,
+          image: resolveQuestionImageUrl(path),
           label: existingLabel,
         };
         qeditClassifyDistractorImageTargetIdx = null;
@@ -4662,7 +4662,7 @@ async function handleQeditImageUpload(file) {
           existing && typeof existing === "object"
             ? existing.label || ""
             : existing || "";
-        qeditMatchLeftState[targetIdx] = { image: path, label: existingLabel };
+        qeditMatchLeftState[targetIdx] = { image: resolveQuestionImageUrl(path), label: existingLabel };
         qeditMatchLeftImageTargetIdx = null;
         statusEl.innerHTML = `✅ Đã lên site và gắn ảnh cho mục trái #${targetIdx + 1}: <b>${path}</b>`;
         renderQeditMatchLeftRows();
@@ -4675,7 +4675,7 @@ async function handleQeditImageUpload(file) {
         qeditOptionImageTargetIdx !== null
       ) {
         const targetIdx = qeditOptionImageTargetIdx;
-        qeditOptionsState[targetIdx].image = path;
+        qeditOptionsState[targetIdx].image = resolveQuestionImageUrl(path);
         qeditOptionImageTargetIdx = null;
         statusEl.innerHTML = `✅ Đã lên site và gắn ảnh cho lựa chọn #${targetIdx + 1}: <b>${path}</b>`;
         renderQeditOptionsRows();
@@ -4685,7 +4685,7 @@ async function handleQeditImageUpload(file) {
         qeditWorkingQuestion.type === "imagepoint"
       ) {
         const pathInput = document.getElementById("qeditImgPointImagePath");
-        if (pathInput) pathInput.value = path;
+        if (pathInput) pathInput.value = resolveQuestionImageUrl(path);
         statusEl.innerHTML = `✅ Đã lên site và tự điền đường dẫn ảnh: <b>${path}</b>`;
         const previewWrapEl = document.getElementById(
           "qeditImgPointPreviewWrap",
