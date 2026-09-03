@@ -1104,6 +1104,39 @@ async function pushQuestionsToFirestore(questions, docId) {
       { list: [] },
       getQuizChunkDocId(targetDocId, chunks.length + 1),
     );
+    // Phần rỗng ở trên chỉ đủ để CHẶN vòng đọc, chứ KHÔNG xoá nội dung cũ của các
+    // phần dư xa hơn (vd lần trước có 10 phần vì 3700 câu, lần này chỉ còn 3 phần
+    // vì đã bớt câu hỏi -> phần 4..10 vẫn còn nguyên mảng cũ trên Firestore, app
+    // không đọc tới nhưng Console vẫn thấy và báo "Array of ~N is too large to
+    // display"). Dọn tiếp các phần dư xa hơn cho tới khi gặp liên tiếp vài phần
+    // vốn đã trống/không tồn tại thì dừng (giới hạn an toàn để tránh lặp vô hạn).
+    let extraPart = chunks.length + 2;
+    let consecutiveEmpty = 0;
+    const MAX_EXTRA_PARTS_TO_CHECK = 100;
+    while (
+      consecutiveEmpty < 3 &&
+      extraPart - (chunks.length + 1) <= MAX_EXTRA_PARTS_TO_CHECK
+    ) {
+      const extraDocId = getQuizChunkDocId(targetDocId, extraPart);
+      let hasLeftoverData = false;
+      try {
+        const doc = await adminLoad(QUIZ_COLLECTION, extraDocId);
+        hasLeftoverData = !!(
+          doc &&
+          Array.isArray(doc.list) &&
+          doc.list.length > 0
+        );
+      } catch (e) {
+        hasLeftoverData = false; // document không tồn tại
+      }
+      if (hasLeftoverData) {
+        await adminSave(QUIZ_COLLECTION, { list: [] }, extraDocId);
+        consecutiveEmpty = 0;
+      } else {
+        consecutiveEmpty++;
+      }
+      extraPart++;
+    }
     // Dọn rỗng document GỐC (không có hậu tố "__pN") — đây là document đời cũ, từ
     // trước khi có cơ chế chia phần, có thể vẫn còn giữ nguyên mảng "list" hàng
     // nghìn câu hỏi (đôi khi kèm dữ liệu base64 của ảnh cũ) khiến Firebase Console
@@ -2511,6 +2544,7 @@ async function generateAndDeploySets(mode, baseFilename, labelPrefix) {
     );
     showNetlifyLink(`${labelPrefix}${setLabel}:`, link);
   }
+  if (CURRENT_ADMIN_USER) logUserTaoBai(CURRENT_ADMIN_USER.ten);
 }
 function makeUniqueDeploySuffix() {
   const t = Date.now().toString(36);
@@ -2582,7 +2616,7 @@ document.getElementById("pushQuizBtn").onclick = async () => {
   );
   try {
     const pushResult = await pushQuestionsToFirestore(QUIZ);
-    let msg = `🔥 Đã đẩy ${pushResult.ok}/${pushResult.total} câu lên Firebase (document "quizzes/${pushResult.docId}__p1..${pushResult.parts || 1}", môn ${subjectLabel(ACTIVE_SUBJECT)}).`;
+    let msg = `🔥 Đã đẩy ${pushResult.ok}/${pushResult.total} câu lên Firebase, chia thành ${pushResult.parts} phần (document "quizzes/${pushResult.docId}__p1" → "__p${pushResult.parts}", môn ${subjectLabel(ACTIVE_SUBJECT)}, tối đa ${QUIZ_CHUNK_SIZE} câu/phần).`;
     if (pushResult.failList.length)
       msg +=
         `\n⚠️ ${pushResult.failList.length} câu lỗi:\n- ` +
@@ -5074,6 +5108,18 @@ function logUserAccess(ten) {
       Date.now(),
   ).catch((err) =>
     console.error("Không ghi được thời gian truy cập lên sheet:", err),
+  );
+}
+function logUserTaoBai(ten) {
+  if (!ten) return;
+  fetch(
+    USER_DIRECTORY_URL +
+      "?action=log-taobai&ten=" +
+      encodeURIComponent(ten) +
+      "&_=" +
+      Date.now(),
+  ).catch((err) =>
+    console.error("Không ghi được số lần tạo bài lên sheet:", err),
   );
 }
 function applyLoggedInUserToEmailList(user) {
