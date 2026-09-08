@@ -78,14 +78,16 @@ const SCHOOL_LIST = [
 const SCHOOL_OTHER_VALUE = "Khác";
 const QUIZ_LEVEL_LABEL = "";
 const QUIZ_TOPIC_LABEL = "";
-const CLASS_LIST = [];
+const CLASS_LIST = [
+];
 const OPTION_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 const EXAM_DURATION_MINUTES = 50;
 const EXAM_DURATION_SECONDS = EXAM_DURATION_MINUTES * 60;
 const TIMER_WARNING_SECONDS = 10 * 60;
 const TIMER_CIRCUMFERENCE = 2 * Math.PI * 38;
 let timerInterval = null;
-const QUIZ = [];
+const QUIZ = [
+];
 let studentInfo = { id: "", name: "", school: "", class: "" };
 let ACTIVE_QUIZ = QUIZ.slice();
 function shuffleArray(arr) {
@@ -656,7 +658,7 @@ function renderAttemptHistoryList() {
       (h, idx) =>
         `<div class="attempt-history-row">` +
         `<span class="ah-label">Lần ${idx + 1}:</span>` +
-        `<span class="ah-score">${h.score}/1000</span>` +
+        `<span class="ah-score">${h.points}/1000${h.xepLoaiLabel ? " · " + h.xepLoaiLabel : ""}</span>` +
         `<span class="ah-time">⏱ ${formatDuration(h.timeTakenSeconds)}</span>` +
         `<span class="ah-at">${h.at || ""}</span>` +
         `</div>`,
@@ -1054,51 +1056,67 @@ function computeQuestionPoints(q, pointsPerQuestion) {
   }
   return computeCorrect(q) ? pointsPerQuestion : 0;
 }
-function getScoreTier(points) {
-  if (points >= 1000)
+const PASS_THRESHOLD_POINTS = 800;
+function getResultTier(points, hasXepLoai) {
+  const passed = points >= PASS_THRESHOLD_POINTS;
+  if (!passed) {
     return {
-      tier: "xuatsac",
-      passed: true,
-      classification: "Xuất sắc",
-      statusClass: "pass",
-      emoji: "🏆",
-      statusText: "ĐẠT",
-      faceClass: "perfect",
+      passed: false,
+      xepLoai: null,
+      xepLoaiLabel: "",
+      statusClass: "fail",
+      statusText: "CHƯA ĐẠT",
+      emoji: "🌱",
+      faceClass: "sad",
       faceMsg:
-        "🎉 Tuyệt vời! Bạn đã hoàn thành bài rất tốt. Hãy tiếp tục phát huy nhé!",
+        "📚 Đừng bỏ cuộc! Hãy xem lại phần giải thích, ôn tập thêm và thử lại nhé!",
     };
-  if (points >= 900)
+  }
+  if (!hasXepLoai) {
     return {
-      tier: "gioi",
       passed: true,
-      classification: "Giỏi",
+      xepLoai: null,
+      xepLoaiLabel: "",
       statusClass: "pass",
-      emoji: "🥇",
       statusText: "ĐẠT",
+      emoji: "🎉",
       faceClass: "perfect",
-      faceMsg: "🌟 Rất tốt! Bạn đã nắm chắc phần lớn kiến thức bài học!",
+      faceMsg: "🎉 Chúc mừng! Bạn đã hoàn thành bài rất tốt!",
     };
-  if (points >= 800)
+  }
+  if (points >= 1e3) {
     return {
-      tier: "kha",
       passed: true,
-      classification: "Khá",
+      xepLoai: "xuatsac",
+      xepLoaiLabel: "Xuất sắc",
       statusClass: "pass",
-      emoji: "🥈",
       statusText: "ĐẠT",
-      faceClass: "neutral",
-      faceMsg: "👍 Khá tốt! Ôn lại những câu chưa chắc để tiến bộ hơn nhé!",
+      emoji: "🏆",
+      faceClass: "perfect",
+      faceMsg: "🏆 Xuất sắc! Điểm tuyệt đối, quá tuyệt vời!",
     };
+  }
+  if (points >= 900) {
+    return {
+      passed: true,
+      xepLoai: "gioi",
+      xepLoaiLabel: "Giỏi",
+      statusClass: "pass",
+      statusText: "ĐẠT",
+      emoji: "🎉",
+      faceClass: "perfect",
+      faceMsg: "🎉 Giỏi lắm! Bạn đã làm rất tốt, tiếp tục phát huy nhé!",
+    };
+  }
   return {
-    tier: "fail",
-    passed: false,
-    classification: null,
-    statusClass: "fail",
-    emoji: "🌱",
-    statusText: "CHƯA ĐẠT",
-    faceClass: "sad",
-    faceMsg:
-      "📚 Đừng bỏ cuộc! Hãy xem lại phần giải thích, ôn tập thêm và thử lại nhé!",
+    passed: true,
+    xepLoai: "kha",
+    xepLoaiLabel: "Khá",
+    statusClass: "pass",
+    statusText: "ĐẠT",
+    emoji: "👍",
+    faceClass: "neutral",
+    faceMsg: "👍 Khá tốt! Cố gắng thêm chút nữa để đạt loại Giỏi nhé!",
   };
 }
 function startExamTimer() {
@@ -2771,7 +2789,7 @@ function sendResultToClassSheet(
   correctCount,
   passed,
   timeTakenSeconds,
-  classification,
+  xepLoaiLabel,
 ) {
   if (!CLASS_SHEET_CONFIG.enabled || !CLASS_SHEET_CONFIG.webAppUrl) return;
   const payload = {
@@ -2783,8 +2801,7 @@ function sendResultToClassSheet(
     quizTitle: getResultQuizTitle(),
     mode: QUIZ_MODE === "kiemtra" ? "Kiểm tra" : "Ôn tập",
     score: `${points}/1000`,
-    classification:
-      QUIZ_MODE === "kiemtra" && classification ? classification : "",
+    xepLoai: xepLoaiLabel || "",
     passed: passed,
     correctCount: correctCount,
     totalCount: ACTIVE_QUIZ.length,
@@ -2819,8 +2836,23 @@ function sendResultToClassSheet(
   }
 }
 const CONFETTI_PRESETS = {
-  pass: {
-    count: 70,
+  kha: {
+    count: 55,
+    colors: ["#2f6fed", "#14b8a6", "#1f9d55", "#a855f7"],
+    duration: [2.2, 2.8],
+  },
+  gioi: {
+    count: 100,
+    colors: ["#2f6fed", "#1f9d55", "#f4c542", "#a855f7", "#ec4899", "#14b8a6"],
+    duration: [2.6, 3.4],
+  },
+  xuatsac: {
+    count: 160,
+    colors: ["#f4c542", "#eab308", "#f97316", "#e0433c", "#a855f7", "#2f6fed"],
+    duration: [3, 4],
+  },
+  default: {
+    count: 90,
     colors: [
       "#e0433c",
       "#2f6fed",
@@ -2831,55 +2863,43 @@ const CONFETTI_PRESETS = {
       "#14b8a6",
       "#f97316",
     ],
-    waves: 1,
-  },
-  kha: {
-    count: 60,
-    colors: ["#2f6fed", "#1f9d55", "#14b8a6", "#a855f7"],
-    waves: 1,
-  },
-  gioi: {
-    count: 120,
-    colors: ["#f4c542", "#f97316", "#e0433c", "#a855f7", "#2f6fed"],
-    waves: 1,
-  },
-  xuatsac: {
-    count: 90,
-    colors: ["#ffd700", "#ffb703", "#f4c542", "#fff4cc", "#f97316"],
-    waves: 2,
+    duration: [2.6, 3.5],
   },
 };
-function fireConfetti(preset) {
-  const cfg = CONFETTI_PRESETS[preset] || CONFETTI_PRESETS.pass;
-  function burst() {
-    const layer = document.createElement("div");
-    layer.className = "confetti-layer";
-    for (let i = 0; i < cfg.count; i++) {
-      const piece = document.createElement("span");
-      piece.className = "confetti-piece";
-      const left = Math.random() * 100;
-      const duration = 2.6 + Math.random() * 0.9;
-      const delay = Math.random() * 0.5;
-      const drift = Math.random() * 140 - 70 + "px";
-      const spin =
-        (Math.random() > 0.5 ? 1 : -1) * (360 + Math.random() * 540) + "deg";
-      const color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
-      piece.style.left = left + "vw";
-      piece.style.background = color;
-      piece.style.animationDuration = duration + "s";
-      piece.style.animationDelay = delay + "s";
-      piece.style.setProperty("--confetti-drift", drift);
-      piece.style.setProperty("--confetti-spin", spin);
-      if (Math.random() > 0.5) piece.style.borderRadius = "50%";
-      layer.appendChild(piece);
-    }
-    document.body.appendChild(layer);
-    setTimeout(() => {
-      layer.remove();
-    }, 3600);
+function fireConfetti(tier) {
+  const preset = CONFETTI_PRESETS[tier] || CONFETTI_PRESETS.default;
+  const layer = document.createElement("div");
+  layer.className = "confetti-layer";
+  const [minDur, maxDur] = preset.duration;
+  for (let i = 0; i < preset.count; i++) {
+    const piece = document.createElement("span");
+    piece.className = "confetti-piece";
+    const left = Math.random() * 100;
+    const duration = minDur + Math.random() * (maxDur - minDur);
+    const delay = Math.random() * 0.5;
+    const drift = Math.random() * 140 - 70 + "px";
+    const spin =
+      (Math.random() > 0.5 ? 1 : -1) * (360 + Math.random() * 540) + "deg";
+    const color = preset.colors[Math.floor(Math.random() * preset.colors.length)];
+    piece.style.left = left + "vw";
+    piece.style.background = color;
+    piece.style.animationDuration = duration + "s";
+    piece.style.animationDelay = delay + "s";
+    piece.style.setProperty("--confetti-drift", drift);
+    piece.style.setProperty("--confetti-spin", spin);
+    if (Math.random() > 0.5) piece.style.borderRadius = "50%";
+    layer.appendChild(piece);
   }
-  burst();
-  if (cfg.waves > 1) setTimeout(burst, 400);
+  document.body.appendChild(layer);
+  setTimeout(
+    () => {
+      layer.remove();
+    },
+    (maxDur + 0.6) * 1000,
+  );
+  if (tier === "xuatsac") {
+    setTimeout(() => fireConfetti("gioi"), 350);
+  }
 }
 function submitQuiz(force) {
   if (!force) {
@@ -2899,33 +2919,35 @@ function submitQuiz(force) {
   const timeTakenSeconds = quizStartTime
     ? Math.round((Date.now() - quizStartTime) / 1e3)
     : 0;
+  const isKiemTra = QUIZ_MODE === "kiemtra";
   const pointsPerQuestion = 1e3 / ACTIVE_QUIZ.length;
   let correctCount = 0;
   let rawPoints = 0;
   ACTIVE_QUIZ.forEach((q) => {
     ensureState(q);
-    const correct = computeCorrect(q);
+    const correct = isKiemTra ? computeCorrect(q) : checkAnswerCorrect(q);
     state[q.id].correct = correct;
-    state[q.id].checked = true;
+    if (!isKiemTra) state[q.id].checked = true;
     if (correct) correctCount++;
     rawPoints += computeQuestionPoints(q, pointsPerQuestion);
   });
   const points = Math.round(rawPoints);
+  const tier = getResultTier(points, isKiemTra);
+  const passed = tier.passed;
   const isPerfect = points >= 1e3;
-  const resultTier = getScoreTier(points);
-  const passed = resultTier.passed;
   lastResult = {
     points: points,
     correctCount: correctCount,
     passed: passed,
+    tier: tier,
     isPerfect: isPerfect,
     timeTakenSeconds: timeTakenSeconds,
-    tier: resultTier.tier,
-    classification: resultTier.classification,
   };
   if (studentInfo) {
     addAttemptHistoryRecord(studentInfo, {
-      score: points,
+      points: points,
+      passed: passed,
+      xepLoaiLabel: tier.xepLoaiLabel,
       correctCount: correctCount,
       total: ACTIVE_QUIZ.length,
       timeTakenSeconds: timeTakenSeconds,
@@ -2934,40 +2956,37 @@ function submitQuiz(force) {
     renderAttemptCount();
   }
   showResultScreen();
-  if (QUIZ_MODE === "kiemtra") showResultPopup();
-  if (passed) {
-    fireConfetti(QUIZ_MODE === "kiemtra" ? resultTier.tier : "pass");
+  if (isKiemTra) {
+    showResultPopup();
+    if (passed) fireConfetti(tier.xepLoai);
+  } else if (passed) {
+    fireConfetti();
   }
   sendResultToClassSheet(
     points,
     correctCount,
     passed,
     timeTakenSeconds,
-    resultTier.classification,
+    tier.xepLoaiLabel,
   );
 }
 function showResultPopup() {
   if (QUIZ_MODE !== "kiemtra") return;
   if (!lastResult) return;
-  const {
-    points: points,
-    passed: passed,
-    isPerfect: isPerfect,
-    classification: classification,
-  } = lastResult;
+  const { points: points, passed: passed, tier: tier } = lastResult;
   const modal = document.getElementById("resultModal");
   if (!modal) return;
   const emojiEl = document.getElementById("resultModalEmoji");
   const titleEl = document.getElementById("resultModalTitle");
   const descEl = document.getElementById("resultModalDesc");
-  if (isPerfect) {
+  if (tier.xepLoai === "xuatsac") {
     emojiEl.textContent = "🏆";
     titleEl.textContent = "Chúc mừng!";
-    descEl.innerHTML = `<b>Chúc mừng ${textToSafeHtml(studentInfo.name)} đã xuất sắc hoàn thành bài!</b><br>Đạt điểm tuyệt đối <b>1000/1000</b> — xếp loại <b>Xuất sắc</b>.`;
+    descEl.innerHTML = `<b>Chúc mừng ${textToSafeHtml(studentInfo.name)} đã xuất sắc hoàn thành bài!</b><br>Đạt điểm tuyệt đối <b>1000/1000</b> — Xếp loại <b>Xuất sắc</b>.`;
   } else if (passed) {
-    emojiEl.textContent = "🎉";
+    emojiEl.textContent = tier.emoji;
     titleEl.textContent = "Hoàn thành bài!";
-    descEl.innerHTML = `Bạn đã hoàn thành bài làm.<br>Điểm đạt: <b>${points}/1000</b> — xếp loại <b>${textToSafeHtml(classification)}</b>.`;
+    descEl.innerHTML = `Bạn đã hoàn thành bài làm.<br>Điểm đạt: <b>${points}/1000</b> — Xếp loại: <b>${tier.xepLoaiLabel}</b>.`;
   } else {
     emojiEl.textContent = "📋";
     titleEl.textContent = "Đã nộp bài";
@@ -2982,24 +3001,18 @@ function showResultScreen() {
     passed: passed,
     timeTakenSeconds: timeTakenSeconds,
     points: points,
-    isPerfect: isPerfect,
-    classification: classification,
+    tier: tier,
   } = lastResult;
   const scoreDisplay = `${points}<span class="result-score-max">/1000</span>`;
-  const classificationLine =
-    QUIZ_MODE === "kiemtra" && passed && classification
-      ? `<p class="result-detail-line" style="margin-top:-6px;color:var(--text-mute);">Xếp loại: <b>${textToSafeHtml(classification)}</b></p>`
+  const xepLoaiBadge =
+    QUIZ_MODE === "kiemtra" && tier.xepLoai
+      ? `<p class="result-detail-line" style="color:${tier.xepLoai === "xuatsac" ? "var(--gold-text)" : tier.xepLoai === "gioi" ? "var(--green-text)" : "var(--blue-dark)"};font-weight:800;">${tier.emoji} Xếp loại: ${tier.xepLoaiLabel}</p>`
       : "";
-  const perfectBadge =
-    QUIZ_MODE === "kiemtra" && isPerfect
-      ? `<p class="result-detail-line" style="color:var(--gold-text);font-weight:800;">🏆 Điểm tuyệt đối!</p>`
-      : "";
-  const resultTier = getScoreTier(points);
   const encouragementEmoji =
-    resultTier.faceMsg.match(/^[^\s]+/)?.[0] || resultTier.emoji;
-  const encouragementText = resultTier.faceMsg.replace(/^[^\s]+\s*/, "");
+    tier.faceMsg.match(/^[^\s]+/)?.[0] || tier.emoji;
+  const encouragementText = tier.faceMsg.replace(/^[^\s]+\s*/, "");
   const mount = DOM.mainCard;
-  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${resultTier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${scoreDisplay}</div>\n      ${classificationLine}\n      <div class="result-status ${resultTier.statusClass}">${resultTier.emoji} ${resultTier.statusText}</div>\n      ${perfectBadge}\n      <p class="result-detail-line">Bạn trả lời đúng <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button class="btn btn-primary" onclick="restartQuiz()">Làm lại</button>\n      </div>\n      <p class="result-submit-note">Bài đã được gửi</p>\n    </div>\n  `;
+  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${tier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${scoreDisplay}</div>\n      <div class="result-status ${tier.statusClass}">${tier.emoji} ${tier.statusText}</div>\n      ${xepLoaiBadge}\n      <p class="result-detail-line">Bạn trả lời đúng <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button class="btn btn-primary" onclick="restartQuiz()">Làm lại</button>\n      </div>\n      <p class="result-submit-note">Bài đã được gửi</p>\n    </div>\n  `;
   renderSidebar();
 }
 function restartQuiz() {
