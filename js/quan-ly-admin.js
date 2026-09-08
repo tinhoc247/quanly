@@ -87,7 +87,7 @@ const USER_DIRECTORY_URL =
 const FALLBACK_EMAIL_LIST = [
   { id: "default", label: "Mặc định (ngoại tuyến)", url: DEFAULT_WEB_APP_URL },
 ];
-const HOST_SHEET_ID = EMAIL_SHEET_ID;
+const HOST_SHEET_ID = "1GoCzYfXAAnHu3eSS7ikza7EyqQooY-Jw2kYeBlOO6kg";
 const HOST_SHEET_TAB = "HostSync";
 const FALLBACK_HOST_LIST = [
   {
@@ -96,19 +96,28 @@ const FALLBACK_HOST_LIST = [
   },
 ];
 const ADMIN_KEY = "teamgvth";
-const NETLIFY_SITE_URL = "";
-const FUNCTIONS_BASE = NETLIFY_SITE_URL + "/.netlify/functions";
+// BACKEND = Google Apps Script Web App (thay cho Cloud Functions, để dùng được gói Firebase
+// Spark/free — Cloud Functions thế hệ 2 bắt buộc gói Blaze dù có gọi API ngoài hay không).
+// Sau khi deploy apps-script/Code.gs làm Web App (xem hướng dẫn trong file đó), dán URL
+// dạng ".../exec" vào đây. Khác với Cloud Functions (mỗi hàm 1 URL riêng), Apps Script chỉ
+// có DUY NHẤT 1 URL — tên action được gửi kèm trong payload để backend tự định tuyến.
+const FUNCTIONS_ORIGIN =
+  "https://script.google.com/macros/s/AKfycbxhM987yDEh1AMKrdxgHWgPM4318R2g71olrryb7sry-4TQXBpsnmJFuXQGHXHErA/exec";
 async function callAdminApi(action, payload) {
   let res;
   try {
-    res = await fetch(`${FUNCTIONS_BASE}/${action}`, {
+    res = await fetch(FUNCTIONS_ORIGIN, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ adminKey: ADMIN_KEY, ...payload }),
+      // Cố tình dùng text/plain (không phải application/json): nếu để application/json,
+      // trình duyệt sẽ gửi preflight OPTIONS trước — Apps Script Web App KHÔNG xử lý được
+      // preflight nên request sẽ bị lỗi CORS. Backend (Code.gs) vẫn đọc đúng JSON từ
+      // e.postData.contents bất kể Content-Type khai báo là gì.
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action, adminKey: ADMIN_KEY, ...payload }),
     });
   } catch (err) {
     throw new Error(
-      `Không gọi được ${action} (kiểm tra mạng hoặc NETLIFY_SITE_URL): ${err.message}`,
+      `Không gọi được ${action} (kiểm tra mạng hoặc FUNCTIONS_ORIGIN): ${err.message}`,
     );
   }
   let json;
@@ -242,12 +251,12 @@ function renderResultsTable() {
   if (!tbody) return;
   const rows = getFilteredResults();
   if (rows.length === 0)
-    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-mute);padding:14px;">Không có kết quả phù hợp.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--text-mute);padding:14px;">Không có kết quả phù hợp.</td></tr>`;
   else
     tbody.innerHTML = rows
       .map(
         (r) =>
-          `\n      <tr>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(formatResultTimestamp(r.submittedAt))}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);font-weight:800;">${escapeHtml(getResultStudentId(r))}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(r.school || "")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(r.class || "")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(r.name || "")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(r.quizTitle || "")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;font-weight:700;">${r.score ?? ""}%</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;">${r.passed ? "✅" : "❌"}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;">${formatResultDuration(r.timeTakenSeconds)}</td>\n      </tr>\n    `,
+          `\n      <tr>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(formatResultTimestamp(r.submittedAt))}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);font-weight:800;">${escapeHtml(getResultStudentId(r))}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(r.school || "")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(r.class || "")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(r.name || "")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);">${escapeHtml(r.quizTitle || "")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;font-weight:700;">${escapeHtml(r.score ?? "")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;">${escapeHtml(r.classification || "—")}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;">${r.passed ? "✅" : "❌"}</td>\n        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;">${formatResultDuration(r.timeTakenSeconds)}</td>\n      </tr>\n    `,
       )
       .join("");
   const summary = document.getElementById("resultsSummary");
@@ -290,7 +299,8 @@ function exportResultsToExcel() {
     Lớp: r.class || "",
     "Học sinh": r.name || "",
     Đề: r.quizTitle || "",
-    "Điểm (%)": r.score ?? "",
+    "Điểm (thang 1000)": r.score ?? "",
+    "Xếp loại": r.classification || "",
     "Số câu đúng": r.correctCount ?? "",
     "Tổng số câu": r.totalCount ?? "",
     "Kết quả": r.passed ? "Đạt" : "Chưa đạt",
@@ -367,26 +377,45 @@ function fetchHostSheetJSONP_LEGACY() {
           "siteid",
           "site id",
           "token",
+          "owner/repo",
+          "repo",
+          "branch",
         ]);
+        // Cột B của sheet "HostSync" giờ chứa "owner/repo" (repo GitHub Pages của host đó),
+        // vd "mytruong/de-thi-2026" — KHÔNG còn là Netlify Site ID nữa. Cột C vẫn là token,
+        // nhưng giờ là GitHub Personal Access Token (quyền "Contents: read & write" trên repo
+        // đó) thay vì Netlify Personal Access Token. Cột D (tuỳ chọn) = tên nhánh, mặc định
+        // "main" nếu để trống. Cột E (tuỳ chọn) = URL GitHub Pages tuỳ chỉnh (vd domain riêng),
+        // để trống thì tự suy ra từ owner/repo.
         const parsed = rows
           .map((r) => {
             const cells = (r && r.c) || [];
             const ten =
               cells[0] && cells[0].v != null ? String(cells[0].v).trim() : "";
-            const siteId =
+            const repoSlug =
               cells[1] && cells[1].v != null ? String(cells[1].v).trim() : "";
             const token =
               cells[2] && cells[2].v != null ? String(cells[2].v).trim() : "";
+            const branch =
+              cells[3] && cells[3].v != null ? String(cells[3].v).trim() : "";
+            const pagesUrl =
+              cells[4] && cells[4].v != null ? String(cells[4].v).trim() : "";
+            const slugParts = repoSlug.split("/").map((s) => s.trim());
+            const owner = slugParts[0] || "";
+            const repo = slugParts[1] || "";
             return {
-              id: siteId || token,
-              label: ten || siteId || "Không tên",
+              id: repoSlug.replace(/\//g, "__") || token,
+              label: ten || repoSlug || "Không tên",
               token: token,
-              siteId: siteId,
+              owner: owner,
+              repo: repo,
+              branch: branch || "main",
+              pagesUrl: pagesUrl,
             };
           })
           .filter((h) => {
-            if (!h.token || !h.siteId) return false;
-            if (HEADER_LOOKALIKES.has(h.siteId.toLowerCase())) return false;
+            if (!h.token || !h.owner || !h.repo) return false;
+            if (HEADER_LOOKALIKES.has((h.owner + "/" + h.repo).toLowerCase())) return false;
             if (HEADER_LOOKALIKES.has(h.token.toLowerCase())) return false;
             return true;
           });
@@ -418,7 +447,7 @@ async function syncHostSheetToFirestore(sheetHosts) {
       try {
         await adminSave(
           "hosts",
-          { label: h.label, token: h.token, siteId: h.siteId },
+          { label: h.label, token: h.token, owner: h.owner, repo: h.repo, branch: h.branch, pagesUrl: h.pagesUrl },
           h.id,
         );
       } catch (err) {
@@ -440,7 +469,13 @@ async function loadHostListFromApi() {
       throw new Error(
         'Sheet "HostSync" chưa có dòng host hợp lệ nào (thiếu Site ID hoặc Token).',
       );
-    HOST_LIST = sheetHosts.map((h) => ({ id: h.siteId, label: h.label }));
+    HOST_LIST = sheetHosts.map((h) => ({
+      id: h.id,
+      label: h.label,
+      owner: h.owner,
+      repo: h.repo,
+      pagesUrl: h.pagesUrl,
+    }));
     ACTIVE_HOST_IS_CONFIGURED = true;
     if (hostStatusEl) hostStatusEl.innerHTML = "";
     HOST_SYNC_PROMISE = syncHostSheetToFirestore(sheetHosts);
@@ -452,9 +487,12 @@ async function loadHostListFromApi() {
         .map((d) => ({
           id: d.id,
           label: d.label || d.id,
-          hasSiteId: !!d.siteId,
+          owner: d.owner,
+          repo: d.repo,
+          pagesUrl: d.pagesUrl,
+          hasRepo: !!(d.owner && d.repo),
         }))
-        .filter((h) => h.hasSiteId);
+        .filter((h) => h.hasRepo);
       if (!parsed.length)
         throw new Error('Firestore (collection "hosts") cũng đang trống.');
       HOST_LIST = parsed;
@@ -479,6 +517,8 @@ async function loadHostListFromApi() {
   syncActiveHost();
   saveState();
   renderHostSelect();
+  // Đã khôi phục loadHostUsageList() theo yêu cầu — cần chạy authorize() 1 lần trong
+  // Apps Script editor để cấp quyền UrlFetchApp trước khi dùng (xem hướng dẫn kèm theo).
   if (ACTIVE_HOST_IS_CONFIGURED) loadHostUsageList(HOST_LIST.map((h) => h.id));
 }
 function renderHostStatus() {
@@ -492,57 +532,26 @@ function renderHostStatus() {
     ' <span style="color:#666">(dùng chung cho cả bài ôn luyện và bài kiểm tra)</span>';
   hostStatusEl.className = "log show";
   const usage = active ? HOST_USAGE_BY_ID[active.id] : null;
-  if (usage && usage.bandwidth) {
-    const pct = usagePercent(usage.bandwidth);
-    const level = hostUsageLevel(active.id);
-    const usedStr = formatUsageBytes(usage.bandwidth.used);
-    const includedStr = formatUsageBytes(usage.bandwidth.included);
-    html +=
-      "<br>📊 Băng thông đã dùng: <b>" +
-      usedStr +
-      " / " +
-      includedStr +
-      "</b>" +
-      (pct !== null ? " (" + pct + "%)" : "");
-    if (usage.teamMembers && usage.teamMembers.included)
+  // GitHub không có API "bandwidth đã dùng" như Netlify, nên hiển thị dung lượng repo (KB)
+  // + rate limit API còn lại của token làm thông tin tham khảo, thay cho %-băng-thông cũ.
+  if (usage && (usage.repoSizeKb != null || usage.rateLimit)) {
+    if (usage.repoSizeKb != null)
+      html += "<br>📦 Dung lượng repo: <b>" + formatUsageBytes(usage.repoSizeKb * 1024) + "</b>";
+    if (usage.rateLimit)
       html +=
-        " &nbsp;•&nbsp; 👥 Thành viên: " +
-        usage.teamMembers.used +
+        " &nbsp;•&nbsp; 🔌 API rate limit: " +
+        usage.rateLimit.used +
         "/" +
-        usage.teamMembers.included;
-    if (usage.stale)
-      html +=
-        '<br><span style="color:#8a6d00">⚠️ Số liệu usage có thể hơi cũ (không gọi được Netlify API lần gần nhất' +
-        (usage.error ? ": " + escapeHtml(usage.error) : "") +
-        ").</span>";
-    if (level === "critical") {
-      html =
-        '<div style="color:#9f1c19;font-weight:700;">🔴 Host này SẮP HẾT băng thông (' +
-        pct +
-        "%) — " +
-        "nên đổi sang host khác trước khi tạo/deploy thêm bài, kẻo học sinh không tải được bài.</div>" +
-        html;
-      hostStatusEl.style.background = "#fdebea";
-      hostStatusEl.style.color = "#9f1c19";
-    } else if (level === "warn") {
-      html =
-        '<div style="color:#8a6d1a;font-weight:700;">⚠️ Host này đã dùng ' +
-        pct +
-        "% băng thông — cân nhắc để dành, " +
-        "hoặc chuẩn bị sẵn host dự phòng.</div>" +
-        html;
-      hostStatusEl.style.background = "#fff8e6";
-      hostStatusEl.style.color = "#8a6d1a";
-    } else {
-      hostStatusEl.style.background = "";
-      hostStatusEl.style.color = "";
-    }
+        usage.rateLimit.included;
+    hostStatusEl.style.background = "";
+    hostStatusEl.style.color = "";
   } else if (usage && usage.error) {
     html +=
       '<br><span style="color:#9f1c19;font-size:12.5px;">⚠️ Không lấy được số liệu usage (' +
       escapeHtml(usage.error) +
-      '). Có thể do chưa deploy Netlify Function "host-usage", hoặc host này ' +
-      "chưa được cấu hình đúng token/siteId.</span>";
+      '). Có thể do chưa chạy hàm authorize() trong Apps Script editor (chọn "authorize" ở ' +
+      "thanh Select function → bấm ▶ Run → Allow → rồi Deploy > Manage deployments > New " +
+      "version), hoặc host này chưa được cấu hình đúng token/owner/repo.</span>";
     hostStatusEl.style.background = "";
     hostStatusEl.style.color = "";
   } else {
@@ -562,27 +571,13 @@ function formatUsageBytes(n) {
   if (num >= 1024) return (num / 1024).toFixed(0) + " KB";
   return num + " B";
 }
-function usagePercent(part) {
-  if (!part || !part.included) return null;
-  return Math.round(((Number(part.used) || 0) / part.included) * 100);
-}
+// GitHub không có khái niệm quota băng thông kèm API usage như Netlify, nên không còn
+// %-mức-dùng để cảnh báo critical/warn nữa — 2 hàm dưới đây giữ lại (trả về rỗng) chỉ để
+// không phải sửa mọi nơi đang gọi chúng.
 function hostUsageLevel(hostId) {
-  const u = HOST_USAGE_BY_ID[hostId];
-  if (!u || !u.bandwidth) return null;
-  const pct = usagePercent(u.bandwidth);
-  if (pct === null) return null;
-  if (pct >= HOST_USAGE_CRITICAL_PERCENT) return "critical";
-  if (pct >= HOST_USAGE_WARN_PERCENT) return "warn";
-  return "";
+  return null;
 }
 function hostUsageBadgeSuffix(hostId) {
-  const u = HOST_USAGE_BY_ID[hostId];
-  if (!u || !u.bandwidth) return "";
-  const pct = usagePercent(u.bandwidth);
-  if (pct === null) return "";
-  const level = hostUsageLevel(hostId);
-  if (level === "critical") return " — 🔴 " + pct + "% băng thông";
-  if (level === "warn") return " — ⚠️ " + pct + "% băng thông";
   return "";
 }
 async function loadHostUsageList(hostIds, force) {
@@ -693,7 +688,7 @@ async function loadEmailListFromApi() {
       .filter((e) => e.url && e.id);
     if (!parsed.length)
       throw new Error(
-        'Chưa có mail nào trong Firestore (collection "emails" trống)',
+        'Chưa có mail nào trong Firestore (collection "emails" trống — thử bấm "📥 Import dữ liệu cũ")',
       );
     EMAIL_LIST = parsed;
   } catch (err) {
@@ -2017,15 +2012,13 @@ function makeThumbnailBase64(dataUrl, maxDim) {
     }
   });
 }
-function getTargetHostIdsForImageUpload() {
-  const shareAllEl = document.getElementById("shareImageAllHosts");
-  const shareAll = shareAllEl ? shareAllEl.checked : true;
-  if (shareAll) return HOST_LIST.map((h) => h.id);
-  return [ACTIVE_HOST_ID];
-}
-async function deployImageToSingleHost(hostId, img) {
+// Ảnh giờ chỉ đẩy vào ĐÚNG 1 "kho ảnh dùng chung" (server tự chọn host có
+// isImagesHost === true), phục vụ qua jsDelivr CDN — không còn nhân bản ra từng host
+// nữa. hostId gửi kèm chỉ cần là 1 giá trị hợp lệ (server bỏ qua với request chỉ có
+// ảnh), nên cứ dùng ACTIVE_HOST_ID cho tiện.
+async function deployImageToSingleHost(img) {
   await callAdminApi("deploy-site", {
-    hostId: hostId,
+    hostId: ACTIVE_HOST_ID || "shared-images",
     images: [{ path: img.path, base64: img.base64 }],
   });
 }
@@ -2037,7 +2030,6 @@ function uploadQuestionImageEverywhere(img) {
   return result;
 }
 async function uploadQuestionImageEverywhereInner(img) {
-  const hostIds = getTargetHostIdsForImageUpload();
   img.uploadState = "uploading";
   img.uploadedHosts = Array.isArray(img.uploadedHosts) ? img.uploadedHosts : [];
   img.uploadError = "";
@@ -2045,36 +2037,28 @@ async function uploadQuestionImageEverywhereInner(img) {
   try {
     await HOST_SYNC_PROMISE;
   } catch (err) {}
-  const pendingHostIds = hostIds.filter(
-    (hostId) => !img.uploadedHosts.includes(hostId),
-  );
-  const uploadErrors = [];
-  await Promise.all(
-    pendingHostIds.map(async (hostId) => {
+  // Nếu đường dẫn đã là 1 URL đầy đủ (ảnh dùng link ngoài, không phải ảnh upload
+  // qua GitHub), không có gì để đẩy lên cả — chỉ cần đánh dấu "đã xong" để lưu vào
+  // danh sách ảnh dùng chung, tránh gọi deploy-site với 1 path không hợp lệ (server
+  // sẽ sanitize hỏng URL, sinh ra file rác trên GitHub với tên be bét).
+  if (isAbsoluteImageUrl(img.path)) {
+    img.uploadedHosts = ["external"];
+  } else if (!img.uploadedHosts.includes("shared")) {
+    try {
+      await deployImageToSingleHost(img);
+      img.uploadedHosts = ["shared"];
+    } catch (err) {
       try {
-        await deployImageToSingleHost(hostId, img);
-        img.uploadedHosts.push(hostId);
-      } catch (err) {
-        try {
-          await new Promise((r) => setTimeout(r, 1200));
-          await deployImageToSingleHost(hostId, img);
-          img.uploadedHosts.push(hostId);
-        } catch (err2) {
-          uploadErrors.push(`${hostId}: ${err2.message}`);
-        }
+        await new Promise((r) => setTimeout(r, 1200));
+        await deployImageToSingleHost(img);
+        img.uploadedHosts = ["shared"];
+      } catch (err2) {
+        img.uploadError = err2.message;
       }
-      renderQuestionImageList();
-    }),
-  );
-  if (uploadErrors.length)
-    img.uploadError =
-      (img.uploadError ? img.uploadError + "; " : "") + uploadErrors.join("; ");
-  img.uploadState =
-    img.uploadedHosts.length === hostIds.length
-      ? "done"
-      : img.uploadedHosts.length > 0
-        ? "partial"
-        : "error";
+    }
+    renderQuestionImageList();
+  }
+  img.uploadState = img.uploadedHosts.length ? "done" : "error";
   qimgDbPut(img);
   if (img.uploadedHosts.length && !img.autoCopiedOnce) {
     img.autoCopiedOnce = true;
@@ -2176,7 +2160,7 @@ async function removeQuestionImage(id) {
   if (hostIds.length) {
     if (
       !confirm(
-        `Xoá hẳn ảnh "${img.fileName}" khỏi ${hostIds.length} host (Netlify) và khỏi danh sách ảnh dùng chung? Không thể hoàn tác.`,
+        `Xoá hẳn ảnh "${img.fileName}" khỏi ${hostIds.length} host (GitHub) và khỏi danh sách ảnh dùng chung? Không thể hoàn tác.`,
       )
     )
       return;
@@ -2213,7 +2197,7 @@ function clearQuestionImages() {
     !confirm(
       "Xoá " +
         QUESTION_IMAGES.length +
-        " ảnh khỏi danh sách trên MÁY NÀY? (Ảnh đã đẩy lên Netlify/Firestore sẽ KHÔNG bị xoá khỏi site, chỉ xoá khỏi danh sách hiển thị cục bộ.)",
+        " ảnh khỏi danh sách trên MÁY NÀY? (Ảnh đã đẩy lên GitHub/Firestore sẽ KHÔNG bị xoá khỏi site, chỉ xoá khỏi danh sách hiển thị cục bộ.)",
     )
   )
     return;
@@ -2221,15 +2205,26 @@ function clearQuestionImages() {
   qimgDbClear();
   renderQuestionImageList();
 }
+function isAbsoluteImageUrl(str) {
+  // Ảnh dùng link ngoài (đã host sẵn ở nơi khác, dán thẳng URL đầy đủ vào ô
+  // đường dẫn) thay vì ảnh upload-qua-GitHub thông thường (dạng "image/ten.png").
+  return /^(https?:)?\/\//i.test(str) || /^data:/i.test(str);
+}
 function updateQuestionImagePath(id, newPath) {
   const img = QUESTION_IMAGES.find((i) => i.id === id);
   if (!img) return;
   const trimmed = String(newPath || "")
     .trim()
     .replace(/^\/+/, "");
-  const finalPath = trimmed.toLowerCase().startsWith("image/")
+  // Nếu người dùng dán thẳng 1 URL đầy đủ (vd link jsDelivr của ảnh đã có sẵn) thì
+  // GIỮ NGUYÊN, không được ghép thêm tiền tố "image/" phía trước — nếu không sẽ ra
+  // đường dẫn hỏng dạng "image/https://..." (trình duyệt hiểu nhầm là đường dẫn
+  // tương đối, ảnh không tải được) và server cũng không upload/sanitize đúng được.
+  const finalPath = isAbsoluteImageUrl(trimmed)
     ? trimmed
-    : "image/" + trimmed.replace(/^image\//i, "");
+    : trimmed.toLowerCase().startsWith("image/")
+      ? trimmed
+      : "image/" + trimmed.replace(/^image\//i, "");
   const dupes = QUESTION_IMAGES.filter(
     (i) => i.id !== id && i.path === finalPath,
   );
@@ -2244,7 +2239,7 @@ function updateQuestionImagePath(id, newPath) {
   uploadQuestionImageEverywhere(img);
 }
 function buildQuestionImageSnippet(path) {
-  return `<img src="${path}" class="q-pre-image">`;
+  return `<img src="${resolveQuestionImageUrl(path)}" class="q-pre-image">`;
 }
 function copyTextToClipboard(text, successMsg) {
   navigator.clipboard
@@ -2260,79 +2255,20 @@ function copyTextToClipboard(text, successMsg) {
       );
     });
 }
-// SỬA LỖI: ảnh dùng chung (vd background-quiz-light.webp, background-news.webp) chỉ được đẩy
-// tới các host CÓ MẶT trong HOST_LIST tại đúng thời điểm bấm upload (xem
-// getTargetHostIdsForImageUpload()/uploadQuestionImageEverywhereInner()). Nếu sau đó có thêm
-// host mới, host mới đó sẽ KHÔNG có ảnh này (404 thật trên host), dù mục "Ảnh dùng chung đã có
-// trên hệ thống" vẫn hiển thị ảnh này là "đã lên N host" — khiến admin tưởng ảnh đã có sẵn khắp
-// nơi trong khi thực ra thiếu đúng ở (các) host mới/host đang chọn để test. Hàm dưới đây tính
-// đúng những host còn thiếu, và findLocalQuestionImageByPath()/resyncSharedImageToMissingHosts()
-// cho phép đẩy bù ảnh đó sang các host còn thiếu mà không cần chọn lại file (nếu ảnh gốc vẫn còn
-// trong danh sách ảnh trên máy này) — hoặc báo rõ cần chọn lại file nếu không còn base64 gốc.
-function getMissingHostIdsForSharedImage(row) {
-  const have = Array.isArray(row.hostIds) ? row.hostIds : [];
-  return HOST_LIST.filter((h) => !have.includes(h.id));
-}
-function findLocalQuestionImageByPath(path) {
-  return QUESTION_IMAGES.find((i) => i.path === path);
-}
-async function resyncSharedImageToMissingHosts(path) {
-  const row = SHARED_QUESTION_IMAGES.find((r) => (r.path || r.id) === path);
-  if (!row) return;
-  const missing = getMissingHostIdsForSharedImage(row);
-  if (!missing.length) {
-    setLog("downloadLog", "ok", `Ảnh "${path}" đã có mặt trên tất cả host hiện tại, không cần đồng bộ thêm.`);
-    return;
-  }
-  const local = findLocalQuestionImageByPath(path);
-  if (!local || !local.base64) {
-    alert(
-      `Ảnh "${path}" đang thiếu ở ${missing.length} host (${missing.map((h) => h.label || h.id).join(", ")}), ` +
-        `nhưng máy này không còn giữ file ảnh gốc để tự đẩy bù.\n\n` +
-        `Cách khắc phục: vào mục "Ảnh câu hỏi", chọn lại đúng file ảnh này, đặt path đúng bằng "${path}", ` +
-        `hệ thống sẽ tự đẩy lên (các) host còn thiếu.`,
-    );
-    return;
-  }
-  setLog("downloadLog", "info", `Đang đẩy bù ảnh "${path}" sang ${missing.length} host còn thiếu...`);
-  const errors = [];
-  for (const h of missing) {
-    try {
-      await deployImageToSingleHost(h.id, local);
-      row.hostIds = Array.isArray(row.hostIds) ? row.hostIds : [];
-      row.hostIds.push(h.id);
-    } catch (err) {
-      errors.push(`${h.label || h.id}: ${err.message}`);
-    }
-  }
-  try {
-    await adminSave(
-      "questionImages",
-      { ...row, hostIds: row.hostIds, updatedAt: Date.now() },
-      questionImagePathToDocId(path),
-    );
-  } catch (err) {
-    console.warn("Không lưu được registry ảnh dùng chung sau khi đồng bộ:", err);
-  }
-  setLog(
-    "downloadLog",
-    errors.length ? "err" : "ok",
-    errors.length
-      ? `Đã đẩy bù ảnh "${path}" nhưng còn lỗi ở ${errors.length} host:\n` + errors.join("\n")
-      : `✅ Đã đồng bộ xong ảnh "${path}" tới tất cả host.`,
-  );
-  loadSharedQuestionImagesRegistry();
-}
 function questionImageUploadBadge(img) {
-  const hostCount = HOST_LIST.length || 1;
   if (img.uploadState === "uploading")
-    return '<span style="color:#8a6d00;">⏳ Đang đẩy lên Netlify...</span>';
+    return '<span style="color:#8a6d00;">⏳ Đang đẩy lên GitHub...</span>';
+  if (Array.isArray(img.uploadedHosts) && img.uploadedHosts.includes("external"))
+    return '<span style="color:#1f9d55;">🔗 Dùng link ảnh ngoài (không upload)</span>';
+  // Từ khi chuyển sang "1 kho ảnh dùng chung + jsDelivr CDN", ảnh chỉ cần đẩy lên
+  // ĐÚNG 1 nơi (repo ảnh) là TẤT CẢ các site/host khác đã đọc được ngay qua URL CDN
+  // chung — không còn kiểu "đẩy lặp lại ảnh vào từng host" như hệ thống cũ nữa. Vì
+  // vậy không hiển thị "x/8 host" (dễ hiểu lầm là còn thiếu 7 host khác) — chỉ cần
+  // báo "đã lên kho ảnh dùng chung" là đủ, các host khác luôn đọc được ảnh này.
   if (img.uploadState === "done")
-    return `<span style="color:#1f9d55;">✅ Đã lên ${img.uploadedHosts.length}/${hostCount} host</span>`;
-  if (img.uploadState === "partial")
-    return `<span style="color:#b00020;" title="${escapeHtml(img.uploadError)}">⚠️ Mới lên ${img.uploadedHosts.length}/${hostCount} host, còn lỗi</span>`;
-  if (img.uploadState === "error")
-    return `<span style="color:#b00020;" title="${escapeHtml(img.uploadError)}">❌ Chưa lên được host nào</span>`;
+    return '<span style="color:#1f9d55;">✅ Đã lên kho ảnh dùng chung (mọi host đều đọc được)</span>';
+  if (img.uploadState === "partial" || img.uploadState === "error")
+    return `<span style="color:#b00020;" title="${escapeHtml(img.uploadError)}">❌ Chưa đẩy lên được kho ảnh dùng chung</span>`;
   return '<span style="color:var(--text-mute);">Chưa đẩy lên</span>';
 }
 function renderQuestionImageList() {
@@ -2409,13 +2345,10 @@ function renderQuestionImageList() {
         SHARED_QUESTION_IMAGES.slice()
           .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
           .slice(0, SHARED_IMAGE_LIST_LIMIT)
-          .map((row) => {
-            const missing = getMissingHostIdsForSharedImage(row);
-            const statusHtml = missing.length
-              ? `<span style="color:#b00020;font-weight:700;" title="Thiếu ở: ${escapeHtml(missing.map((h) => h.label || h.id).join(", "))}">⚠️ Thiếu ở ${missing.length} host</span>`
-              : `<span style="color:#1f9d55;">✅ Đã có ở tất cả host</span>`;
-            return `\n          <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px dashed var(--border);border-radius:8px;">\n            ${row.thumb ? `<img src="data:image/jpeg;base64,${row.thumb}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;flex-shrink:0;">` : ""}\n            <div style="flex:1;min-width:0;">\n              <div style="font-family:monospace;font-size:12.5px;">${escapeHtml(row.path || row.id)}</div>\n              <div class="hint" style="margin:0;">${escapeHtml(row.fileName || "")} · đã lên ${(row.hostIds || []).length}/${HOST_LIST.length} host · ${statusHtml}</div>\n            </div>\n            ${missing.length ? `<button type="button" class="btn btn-ghost resync-shared-image-btn" data-path="${escapeHtml(row.path || row.id)}" style="flex-shrink:0;" title="Đẩy bù ảnh này sang các host còn thiếu">🔁 Đồng bộ (${missing.length})</button>` : ""}\n            <button type="button" class="btn btn-ghost copy-shared-image-path-btn" data-path="${escapeHtml(row.path || row.id)}" style="flex-shrink:0;">📋 Copy thẻ ảnh</button>\n            <button type="button" class="btn btn-danger delete-shared-image-btn" data-path="${escapeHtml(row.path || row.id)}" data-hosts="${escapeHtml(JSON.stringify(row.hostIds || []))}" style="flex-shrink:0;">🗑️ Xoá khỏi host</button>\n          </div>\n        `;
-          })
+          .map(
+            (row) =>
+              `\n          <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px dashed var(--border);border-radius:8px;">\n            ${row.thumb ? `<img src="data:image/jpeg;base64,${row.thumb}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;flex-shrink:0;">` : ""}\n            <div style="flex:1;min-width:0;">\n              <div style="font-family:monospace;font-size:12.5px;">${escapeHtml(row.path || row.id)}</div>\n              <div class="hint" style="margin:0;">${escapeHtml(row.fileName || "")} · đã lên ${(row.hostIds || []).length} host</div>\n            </div>\n            <button type="button" class="btn btn-ghost copy-shared-image-path-btn" data-path="${escapeHtml(row.path || row.id)}" style="flex-shrink:0;">📋 Copy thẻ ảnh</button>\n            <button type="button" class="btn btn-danger delete-shared-image-btn" data-path="${escapeHtml(row.path || row.id)}" data-hosts="${escapeHtml(JSON.stringify(row.hostIds || []))}" style="flex-shrink:0;">🗑️ Xoá khỏi host</button>\n          </div>\n        `,
+          )
           .join("") +
         (SHARED_QUESTION_IMAGES.length > SHARED_IMAGE_LIST_LIMIT ||
         SHARED_IMAGE_LIST_LIMIT > IMAGE_LIST_PAGE_SIZE
@@ -2444,19 +2377,6 @@ function renderQuestionImageList() {
           SHARED_IMAGE_LIST_LIMIT = IMAGE_LIST_PAGE_SIZE;
           renderQuestionImageList();
         };
-      sharedBox.querySelectorAll(".resync-shared-image-btn").forEach((btn) => {
-        btn.onclick = async () => {
-          btn.disabled = true;
-          const original = btn.textContent;
-          btn.textContent = "⏳ Đang đồng bộ...";
-          try {
-            await resyncSharedImageToMissingHosts(btn.dataset.path);
-          } finally {
-            btn.disabled = false;
-            btn.textContent = original;
-          }
-        };
-      });
       sharedBox
         .querySelectorAll(".copy-shared-image-path-btn")
         .forEach((btn) => {
@@ -2477,7 +2397,7 @@ function renderQuestionImageList() {
           }
           if (
             !confirm(
-              `Xoá hẳn ảnh "${btn.dataset.path}" khỏi ${hostIds.length} host (Netlify) và khỏi danh sách ảnh dùng chung? Không thể hoàn tác.`,
+              `Xoá hẳn ảnh "${btn.dataset.path}" khỏi ${hostIds.length} host (GitHub) và khỏi danh sách ảnh dùng chung? Không thể hoàn tác.`,
             )
           )
             return;
@@ -2615,13 +2535,13 @@ async function generateAndDeploySets(mode, baseFilename, labelPrefix) {
     setLog(
       "downloadLog",
       "ok",
-      `Đang tạo${setLabel} với ${quizForSet.length} câu hỏi. Đang tải lên Netlify...`,
+      `Đang tạo${setLabel} với ${quizForSet.length} câu hỏi. Đang tải lên GitHub...`,
     );
     const link = await deployToNetlify(html, filename);
     setLog(
       "downloadLog",
       "ok",
-      `Đã tạo "${filename}"${setLabel} với ${quizForSet.length} câu hỏi và đã đẩy lên Netlify.`,
+      `Đã tạo "${filename}"${setLabel} với ${quizForSet.length} câu hỏi và đã đẩy lên GitHub.`,
     );
     showNetlifyLink(`${labelPrefix}${setLabel}:`, link);
   }
@@ -3373,18 +3293,17 @@ function resolveQuestionImageUrl(path) {
     .replace(/^\/+/, "");
   if (!p) return "";
   if (/^https?:\/\//i.test(p)) return p;
-  const hostId =
-    typeof ACTIVE_HOST_ID !== "undefined" &&
-    ACTIVE_HOST_ID &&
-    ACTIVE_HOST_ID !== "default"
-      ? ACTIVE_HOST_ID
-      : typeof HOST_LIST !== "undefined" &&
-          HOST_LIST[0] &&
-          HOST_LIST[0].id !== "default"
-        ? HOST_LIST[0].id
-        : "";
-  if (!hostId) return p;
-  return `https://${hostId}.netlify.app/${p}`;
+  const active =
+    (typeof HOST_LIST !== "undefined" &&
+      HOST_LIST.find((h) => h.id === ACTIVE_HOST_ID)) ||
+    (typeof HOST_LIST !== "undefined" && HOST_LIST[0]);
+  if (!active || active.id === "default" || !active.owner || !active.repo) return p;
+  if (active.pagesUrl) return active.pagesUrl.replace(/\/+$/, "") + "/" + p;
+  const isUserSite = active.repo.toLowerCase() === `${active.owner.toLowerCase()}.github.io`;
+  const base = isUserSite
+    ? `https://${active.owner}.github.io`
+    : `https://${active.owner}.github.io/${active.repo}`;
+  return `${base}/${p}`;
 }
 function renderQeditImgPointPreview() {
   const wrap = document.getElementById("qeditImgPointPreviewWrap");
@@ -4131,9 +4050,9 @@ function collectQeditFormToObject() {
     }));
     merged.answer = qeditPositionAnswerState;
   } else if (merged.type === "imagepoint") {
-    merged.image = document
-      .getElementById("qeditImgPointImagePath")
-      .value.trim();
+    merged.image = resolveQuestionImageUrl(
+      document.getElementById("qeditImgPointImagePath").value.trim(),
+    );
     merged.points = qeditImgPointState.map((pt) => {
       const p = {
         x: pt.x === "" ? 0 : Number(pt.x),
@@ -4740,7 +4659,7 @@ async function handleQeditImageUpload(file) {
             ? existing.label || ""
             : existing || "";
         qeditClassifyItemsState[targetIdx] = {
-          image: path,
+          image: resolveQuestionImageUrl(path),
           label: existingLabel,
         };
         qeditClassifyItemImageTargetIdx = null;
@@ -4760,7 +4679,7 @@ async function handleQeditImageUpload(file) {
             ? existing.label || ""
             : existing || "";
         qeditClassifyDistractorsState[targetIdx] = {
-          image: path,
+          image: resolveQuestionImageUrl(path),
           label: existingLabel,
         };
         qeditClassifyDistractorImageTargetIdx = null;
@@ -4778,7 +4697,7 @@ async function handleQeditImageUpload(file) {
           existing && typeof existing === "object"
             ? existing.label || ""
             : existing || "";
-        qeditMatchLeftState[targetIdx] = { image: path, label: existingLabel };
+        qeditMatchLeftState[targetIdx] = { image: resolveQuestionImageUrl(path), label: existingLabel };
         qeditMatchLeftImageTargetIdx = null;
         statusEl.innerHTML = `✅ Đã lên site và gắn ảnh cho mục trái #${targetIdx + 1}: <b>${path}</b>`;
         renderQeditMatchLeftRows();
@@ -4791,7 +4710,7 @@ async function handleQeditImageUpload(file) {
         qeditOptionImageTargetIdx !== null
       ) {
         const targetIdx = qeditOptionImageTargetIdx;
-        qeditOptionsState[targetIdx].image = path;
+        qeditOptionsState[targetIdx].image = resolveQuestionImageUrl(path);
         qeditOptionImageTargetIdx = null;
         statusEl.innerHTML = `✅ Đã lên site và gắn ảnh cho lựa chọn #${targetIdx + 1}: <b>${path}</b>`;
         renderQeditOptionsRows();
@@ -4801,7 +4720,7 @@ async function handleQeditImageUpload(file) {
         qeditWorkingQuestion.type === "imagepoint"
       ) {
         const pathInput = document.getElementById("qeditImgPointImagePath");
-        if (pathInput) pathInput.value = path;
+        if (pathInput) pathInput.value = resolveQuestionImageUrl(path);
         statusEl.innerHTML = `✅ Đã lên site và tự điền đường dẫn ảnh: <b>${path}</b>`;
         const previewWrapEl = document.getElementById(
           "qeditImgPointPreviewWrap",
