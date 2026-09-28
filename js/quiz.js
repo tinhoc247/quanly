@@ -2,6 +2,24 @@ const QUIZ_MODE = "onluyen";
 document.body.classList.add(
   QUIZ_MODE === "kiemtra" ? "mode-kiemtra" : "mode-onluyen",
 );
+const IMG_RETRY_MAX = 3;
+const IMG_RETRY_DELAY_MS = 700;
+function imgRetryOnError(imgEl) {
+  if (!imgEl) return;
+  const tries = Number(imgEl.dataset.retryCount || 0);
+  if (tries >= IMG_RETRY_MAX) return;
+  imgEl.dataset.retryCount = String(tries + 1);
+  if (!imgEl.dataset.retrySrc) imgEl.dataset.retrySrc = imgEl.src;
+  const baseSrc = imgEl.dataset.retrySrc;
+  setTimeout(function () {
+    imgEl.src =
+      baseSrc +
+      (baseSrc.indexOf("?") > -1 ? "&" : "?") +
+      "__retry=" +
+      Date.now();
+  }, IMG_RETRY_DELAY_MS * (tries + 1));
+}
+window.imgRetryOnError = imgRetryOnError;
 let securityViolationCount = 0;
 let securityToastEl = null,
   securityToastMsgEl = null,
@@ -1407,6 +1425,7 @@ function buildQuestionPreImageEl(q, side) {
   const preImg = document.createElement("img");
   preImg.className = "q-pre-image zoomable-img";
   preImg.src = q.preImage;
+  preImg.onerror = () => imgRetryOnError(preImg);
   preImg.alt = "";
   preImg.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -1454,6 +1473,7 @@ function renderAll() {
     imgCol.className = "q-row-image";
     const preImg = document.createElement("img");
     preImg.src = q.preImage;
+    preImg.onerror = () => imgRetryOnError(preImg);
     preImg.alt = "";
     preImg.classList.add("zoomable-img");
     preImg.addEventListener("click", (e) => {
@@ -1641,7 +1661,9 @@ function openImageZoom(src) {
     });
     document.body.appendChild(ov);
   }
-  ov.querySelector("img").src = src;
+  const zoomImg = ov.querySelector("img");
+  zoomImg.src = src;
+  zoomImg.onerror = () => imgRetryOnError(zoomImg);
   ov.classList.add("active");
 }
 function renderChoiceQuestion(q, body, s, multi) {
@@ -1670,6 +1692,7 @@ function renderChoiceQuestion(q, body, s, multi) {
       const img = document.createElement("img");
       img.className = "option-img zoomable-img";
       img.src = optImg.src;
+      img.onerror = () => imgRetryOnError(img);
       img.alt = "";
       img.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1901,7 +1924,7 @@ function renderMatching(q, body, s) {
   function matchCellHtml(txt) {
     if (txt && typeof txt === "object" && txt.image) {
       const safeLabel = (txt.label || "").replace(/"/g, "&quot;");
-      return `<span class="match-item-img-wrap"><img class="match-item-img" src="${txt.image}" alt="${safeLabel}">${txt.label ? `<span>${txt.label}</span>` : ""}</span>`;
+      return `<span class="match-item-img-wrap"><img class="match-item-img" src="${txt.image}" alt="${safeLabel}" onerror="imgRetryOnError(this)">${txt.label ? `<span>${txt.label}</span>` : ""}</span>`;
     }
     return txt;
   }
@@ -2147,6 +2170,7 @@ function renderImagePoint(q, body, s) {
   const img = document.createElement("img");
   img.className = "image-stage-img";
   img.src = q.image;
+  img.onerror = () => imgRetryOnError(img);
   img.alt = q.question;
   img.draggable = false;
   stage.appendChild(img);
@@ -2388,7 +2412,7 @@ function classifyItemContentHTML(item) {
   const label = isObj ? item.label || "" : String(item);
   const imgHtml =
     isObj && item.image
-      ? `<img src="${item.image}" alt="" style="display:block;max-width:100%;max-height:64px;object-fit:contain;border-radius:6px;margin:0 auto 4px;">`
+      ? `<img src="${item.image}" alt="" style="display:block;max-width:100%;max-height:64px;object-fit:contain;border-radius:6px;margin:0 auto 4px;" onerror="imgRetryOnError(this)">`
       : "";
   const labelHtml = label ? `<span>${label}</span>` : "";
   return `<span style="display:flex;flex-direction:column;align-items:center;gap:2px;">${imgHtml}${labelHtml}</span>`;
@@ -2766,6 +2790,190 @@ function formatStartTime(ts) {
   const yy = String(d.getFullYear()).slice(-2);
   return `${hh}:${mm} ${dd}/${MM}/${yy}`;
 }
+/* ===== Gửi kết quả về Google Sheet: hàng đợi + lưu localStorage + tự thử lại =====
+   - Mỗi lần nộp có 1 mã "sid" riêng, GIỮ NGUYÊN khi gửi lại -> server (Get_result_v3.gs)
+     nhận ra và không ghi trùng.
+   - Kết quả được lưu vào localStorage TRƯỚC khi gửi, chỉ xóa khi server xác nhận. */
+const SHEET_PENDING_KEY = "ic3_pending_results_v1";
+const SHEET_TIMEOUT_MS = 30000;
+const SHEET_MAX_AUTO_TRIES = 8;
+let sheetQueue = [];
+let sheetFlushing = false;
+let sheetRetryTimer = null;
+let sheetAutoTries = 0;
+let sheetStatusHideTimer = null;
+
+function sheetLoadPending() {
+  try {
+    const list = JSON.parse(localStorage.getItem(SHEET_PENDING_KEY) || "[]");
+    return Array.isArray(list) ? list : [];
+  } catch (e) {
+    return [];
+  }
+}
+function sheetPersist() {
+  try {
+    if (sheetQueue.length)
+      localStorage.setItem(SHEET_PENDING_KEY, JSON.stringify(sheetQueue));
+    else localStorage.removeItem(SHEET_PENDING_KEY);
+  } catch (e) {
+    /* localStorage đầy/bị chặn: vẫn còn hàng đợi trong bộ nhớ trang */
+  }
+}
+function sheetNewSid() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
+function sheetBuildBody(payload) {
+  const body = new URLSearchParams();
+  Object.keys(payload).forEach((k) => body.append(k, String(payload[k])));
+  return body;
+}
+function sheetSetStatus(kind, text, showRetryBtn) {
+  let el = document.getElementById("sheetSyncStatus");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "sheetSyncStatus";
+    el.setAttribute("role", "status");
+    el.style.cssText =
+      "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:99999;" +
+      "max-width:92vw;padding:10px 16px;border-radius:12px;font:600 14px/1.4 system-ui,sans-serif;" +
+      "box-shadow:0 4px 16px rgba(0,0,0,.18);display:flex;gap:10px;align-items:center;";
+    document.body.appendChild(el);
+  }
+  const colors = {
+    sending: ["#eef4ff", "#1e3a8a"],
+    ok: ["#e6f6ec", "#14532d"],
+    warn: ["#fff4d6", "#7a4b00"],
+  };
+  const c = colors[kind] || colors.sending;
+  el.style.background = c[0];
+  el.style.color = c[1];
+  el.textContent = text;
+  if (showRetryBtn) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Gửi lại ngay";
+    btn.style.cssText =
+      "border:0;border-radius:8px;padding:6px 10px;font:inherit;cursor:pointer;background:#7a4b00;color:#fff;";
+    btn.onclick = () => sheetFlush(true);
+    el.appendChild(btn);
+  }
+  el.style.display = "flex";
+  clearTimeout(sheetStatusHideTimer);
+  if (kind === "ok") {
+    sheetStatusHideTimer = setTimeout(() => {
+      el.style.display = "none";
+    }, 8000);
+  }
+}
+/* Trả về: "ok" (server xác nhận đã ghi) | "sent" (đã gửi đi nhưng không đọc được
+   phản hồi) | "retry" (thất bại, phải gửi lại) */
+async function sheetPost(item) {
+  const url = CLASS_SHEET_CONFIG.webAppUrl;
+  const body = sheetBuildBody(item.payload);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SHEET_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: body,
+      redirect: "follow",
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    // Không đọc được phản hồi (CORS/mạng). Thử 1 lần no-cors: nếu request đi được
+    // thì coi là "đã gửi (chưa xác nhận)"; nếu mất mạng thì fetch này cũng lỗi -> retry.
+    try {
+      await fetch(url, { method: "POST", mode: "no-cors", body: body });
+      return "sent";
+    } catch (err2) {
+      return "retry";
+    }
+  }
+  clearTimeout(timer);
+  try {
+    const data = await res.json();
+    return data && data.status === "ok" ? "ok" : "retry"; // busy / error -> gửi lại
+  } catch (err) {
+    return "retry"; // trang lỗi HTML của Google, v.v.
+  }
+}
+async function sheetFlush(manual) {
+  if (sheetFlushing) return;
+  if (!CLASS_SHEET_CONFIG.enabled || !CLASS_SHEET_CONFIG.webAppUrl) return;
+  if (!sheetQueue.length) return;
+  sheetFlushing = true;
+  clearTimeout(sheetRetryTimer);
+  if (manual) sheetAutoTries = 0;
+  sheetSetStatus("sending", "⏳ Đang ghi kết quả…");
+  let failed = false;
+  let unconfirmed = false;
+  while (sheetQueue.length) {
+    const r = await sheetPost(sheetQueue[0]);
+    if (r === "retry") {
+      failed = true;
+      break;
+    }
+    if (r === "sent") unconfirmed = true;
+    sheetQueue.shift();
+    sheetPersist();
+  }
+  sheetFlushing = false;
+  if (!failed) {
+    sheetAutoTries = 0;
+    if (unconfirmed)
+      sheetSetStatus("ok", "📨 Đã gửi kết quả (chưa xác nhận được việc ghi)");
+    else sheetSetStatus("ok", "✅ Đã ghi kết quả");
+    return;
+  }
+  sheetAutoTries++;
+  if (sheetAutoTries >= SHEET_MAX_AUTO_TRIES) {
+    sheetSetStatus(
+      "warn",
+      "⚠️ Chưa ghi được kết quả. Kết quả đã lưu trên máy và sẽ tự gửi lại khi mở lại trang.",
+      true,
+    );
+    return;
+  }
+  const delay =
+    Math.min(60000, 3000 * Math.pow(2, sheetAutoTries - 1)) +
+    Math.floor(Math.random() * 1500);
+  sheetSetStatus("warn", "⚠️ Chưa ghi được kết quả — đã lưu trên máy, đang thử lại…");
+  sheetRetryTimer = setTimeout(() => sheetFlush(false), delay);
+}
+function sheetEnqueue(payload) {
+  sheetQueue.push({ payload: payload, savedAt: Date.now() });
+  sheetPersist(); // lưu bản sao TRƯỚC khi gửi
+  sheetFlush(true);
+}
+(function initSheetSync() {
+  sheetQueue = sheetLoadPending();
+  if (sheetQueue.length) setTimeout(() => sheetFlush(true), 1500); // kết quả còn sót từ lần trước
+  window.addEventListener("online", () => sheetFlush(true));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && sheetQueue.length)
+      sheetFlush(false);
+  });
+  // Lần thoát trang cuối: bắn beacon (cùng sid nên server không ghi trùng);
+  // vẫn giữ trong hàng đợi để lần mở sau xác nhận lại.
+  window.addEventListener("pagehide", () => {
+    if (!sheetQueue.length || !navigator.sendBeacon) return;
+    sheetQueue.forEach((item) => {
+      try {
+        navigator.sendBeacon(
+          CLASS_SHEET_CONFIG.webAppUrl,
+          sheetBuildBody(item.payload),
+        );
+      } catch (e) {}
+    });
+  });
+})();
 function sendResultToClassSheet(
   points,
   correctCount,
@@ -2775,6 +2983,7 @@ function sendResultToClassSheet(
 ) {
   if (!CLASS_SHEET_CONFIG.enabled || !CLASS_SHEET_CONFIG.webAppUrl) return;
   const payload = {
+    sid: sheetNewSid(),
     id: studentInfo.id || "",
     submittedAt: new Date().toLocaleString("vi-VN"),
     name: studentInfo.name,
@@ -2790,33 +2999,7 @@ function sendResultToClassSheet(
     totalCount: ACTIVE_QUIZ.length,
     startTime: quizStartTime ? formatStartTime(quizStartTime) : "",
   };
-  try {
-    let iframe = document.getElementById("sheetSubmitFrame");
-    if (!iframe) {
-      iframe = document.createElement("iframe");
-      iframe.name = "sheetSubmitFrame";
-      iframe.id = "sheetSubmitFrame";
-      iframe.style.display = "none";
-      document.body.appendChild(iframe);
-    }
-    const form = document.createElement("form");
-    form.method = "POST";
-    form.action = CLASS_SHEET_CONFIG.webAppUrl;
-    form.target = "sheetSubmitFrame";
-    form.style.display = "none";
-    Object.keys(payload).forEach((key) => {
-      const input = document.createElement("input");
-      input.type = "hidden";
-      input.name = key;
-      input.value = String(payload[key]);
-      form.appendChild(input);
-    });
-    document.body.appendChild(form);
-    form.submit();
-    form.remove();
-  } catch (err) {
-    console.error("Gửi kết quả vào Google Sheet của lớp thất bại:", err);
-  }
+  sheetEnqueue(payload);
 }
 const CONFETTI_PRESETS = {
   pass: {
