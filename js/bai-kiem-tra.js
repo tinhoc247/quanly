@@ -2560,7 +2560,7 @@ function formatStartTime(ts) {
   return `${hh}:${mm} ${dd}/${MM}/${yy}`;
 }
 /* ===== Gửi kết quả về Google Sheet: hàng đợi + lưu localStorage + tự thử lại =====
-   - Mỗi lần nộp có 1 mã "sid" riêng, GIỮ NGUYÊN khi gửi lại -> server (Get_result_v3.gs)
+   - Mỗi lần nộp có 1 mã "sid" riêng, GIỮ NGUYÊN khi gửi lại -> server (Get_result_v4.gs)
      nhận ra và không ghi trùng.
    - Kết quả được lưu vào localStorage TRƯỚC khi gửi, chỉ xóa khi server xác nhận. */
 const SHEET_PENDING_KEY = "ic3_pending_results_v1";
@@ -2614,6 +2614,7 @@ function sheetSetStatus(kind, text, showRetryBtn) {
     sending: ["#eef4ff", "#1e3a8a"],
     ok: ["#e6f6ec", "#14532d"],
     warn: ["#fff4d6", "#7a4b00"],
+    fail: ["#fde8e8", "#8a1c1c"],
   };
   const c = colors[kind] || colors.sending;
   el.style.background = c[0];
@@ -2622,9 +2623,9 @@ function sheetSetStatus(kind, text, showRetryBtn) {
   if (showRetryBtn) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = "Gửi lại ngay";
+    btn.textContent = "Gửi lại";
     btn.style.cssText =
-      "border:0;border-radius:8px;padding:6px 10px;font:inherit;cursor:pointer;background:#7a4b00;color:#fff;";
+      "border:0;border-radius:8px;padding:6px 10px;font:inherit;cursor:pointer;background:#8a1c1c;color:#fff;";
     btn.onclick = () => sheetFlush(true);
     el.appendChild(btn);
   }
@@ -2636,16 +2637,16 @@ function sheetSetStatus(kind, text, showRetryBtn) {
     }, 8000);
   }
 }
-/* Trả về: "ok" (server xác nhận đã ghi) | "sent" (đã gửi đi nhưng không đọc được
-   phản hồi) | "retry" (thất bại, phải gửi lại) */
+/* Trả về: "ok" (server trả status "ok" -> đã ghi) | "retry" (mọi trường hợp khác:
+   lỗi mạng, hết giờ, server busy/error, không đọc được phản hồi -> coi như CHƯA ghi,
+   gửi lại cùng sid; server nhận ra sid cũ nên không ghi trùng). */
 async function sheetPost(item) {
   const url = CLASS_SHEET_CONFIG.webAppUrl;
   const body = sheetBuildBody(item.payload);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), SHEET_TIMEOUT_MS);
-  let res;
   try {
-    res = await fetch(url, {
+    const res = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
@@ -2654,23 +2655,12 @@ async function sheetPost(item) {
       redirect: "follow",
       signal: ctrl.signal,
     });
-  } catch (err) {
-    clearTimeout(timer);
-    // Không đọc được phản hồi (CORS/mạng). Thử 1 lần no-cors: nếu request đi được
-    // thì coi là "đã gửi (chưa xác nhận)"; nếu mất mạng thì fetch này cũng lỗi -> retry.
-    try {
-      await fetch(url, { method: "POST", mode: "no-cors", body: body });
-      return "sent";
-    } catch (err2) {
-      return "retry";
-    }
-  }
-  clearTimeout(timer);
-  try {
     const data = await res.json();
-    return data && data.status === "ok" ? "ok" : "retry"; // busy / error -> gửi lại
+    return data && data.status === "ok" ? "ok" : "retry";
   } catch (err) {
-    return "retry"; // trang lỗi HTML của Google, v.v.
+    return "retry";
+  } finally {
+    clearTimeout(timer);
   }
 }
 async function sheetFlush(manual) {
@@ -2680,32 +2670,28 @@ async function sheetFlush(manual) {
   sheetFlushing = true;
   clearTimeout(sheetRetryTimer);
   if (manual) sheetAutoTries = 0;
-  sheetSetStatus("sending", "⏳ Đang ghi kết quả…");
+  sheetSetStatus("sending", "⏳ Đang gửi…");
   let failed = false;
-  let unconfirmed = false;
   while (sheetQueue.length) {
     const r = await sheetPost(sheetQueue[0]);
-    if (r === "retry") {
-      failed = true;
+    if (r !== "ok") {
+      failed = true; // chỉ xóa khỏi hàng đợi khi server trả ok
       break;
     }
-    if (r === "sent") unconfirmed = true;
     sheetQueue.shift();
     sheetPersist();
   }
   sheetFlushing = false;
   if (!failed) {
     sheetAutoTries = 0;
-    if (unconfirmed)
-      sheetSetStatus("ok", "📨 Đã gửi kết quả (chưa xác nhận được việc ghi)");
-    else sheetSetStatus("ok", "✅ Đã ghi kết quả");
+    sheetSetStatus("ok", "✅ Đã ghi kết quả");
     return;
   }
   sheetAutoTries++;
   if (sheetAutoTries >= SHEET_MAX_AUTO_TRIES) {
     sheetSetStatus(
-      "warn",
-      "⚠️ Chưa ghi được kết quả. Kết quả đã lưu trên máy và sẽ tự gửi lại khi mở lại trang.",
+      "fail",
+      "❌ Chưa ghi được kết quả. Kết quả vẫn được lưu trên máy.",
       true,
     );
     return;
@@ -2713,7 +2699,7 @@ async function sheetFlush(manual) {
   const delay =
     Math.min(60000, 3000 * Math.pow(2, sheetAutoTries - 1)) +
     Math.floor(Math.random() * 1500);
-  sheetSetStatus("warn", "⚠️ Chưa ghi được kết quả — đã lưu trên máy, đang thử lại…");
+  sheetSetStatus("warn", "⚠️ Chưa gửi được, đang thử lại…");
   sheetRetryTimer = setTimeout(() => sheetFlush(false), delay);
 }
 function sheetEnqueue(payload) {
@@ -2991,7 +2977,7 @@ function showResultScreen() {
     resultTier.faceMsg.match(/^[^\s]+/)?.[0] || resultTier.emoji;
   const encouragementText = resultTier.faceMsg.replace(/^[^\s]+\s*/, "");
   const mount = DOM.mainCard;
-  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${resultTier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${points}<span class="result-score-max">/1000</span></div>\n      ${classificationLine}\n      <div class="result-status ${resultTier.statusClass}">${resultTier.emoji} ${resultTier.statusText}</div>\n      ${perfectBadge}\n      <p class="result-detail-line">Trả lời đúng hoàn toàn <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button class="btn btn-primary" onclick="restartQuiz()">Làm lại bài thi</button>\n      </div>\n      <p class="result-submit-note">Bài đã được gửi</p>\n    </div>\n  `;
+  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${resultTier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${points}<span class="result-score-max">/1000</span></div>\n      ${classificationLine}\n      <div class="result-status ${resultTier.statusClass}">${resultTier.emoji} ${resultTier.statusText}</div>\n      ${perfectBadge}\n      <p class="result-detail-line">Trả lời đúng hoàn toàn <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button class="btn btn-primary" onclick="restartQuiz()">Làm lại bài thi</button>\n      </div>\n    </div>\n  `;
   renderSidebar();
 }
 function restartQuiz() {
