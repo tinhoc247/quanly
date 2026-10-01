@@ -5,9 +5,16 @@
  * Apps Script (free tuyệt đối, không cần thẻ thanh toán), gọi Firestore qua REST API bằng
  * service-account JWT tự ký, và gọi GitHub Contents API qua UrlFetchApp.
  *
- * 5 action tương ứng 5 Cloud Function cũ: admin-load, admin-save, submit-result,
- * deploy-site, host-usage — gửi tất cả qua CÙNG 1 URL, phân biệt bằng field "action"
- * trong JSON body (khác Cloud Functions: mỗi function có URL riêng).
+ * 6 action: admin-load, admin-save, get-exam, submit-result, deploy-site, host-usage
+ * — gửi tất cả qua CÙNG 1 URL, phân biệt bằng field "action" trong JSON body (khác
+ * Cloud Functions: mỗi function có URL riêng).
+ *
+ * "get-exam" và "submit-result" không cần adminKey (học sinh dùng). Đề thi đầy đủ
+ * (kèm đáp án đúng) nằm ở collection Firestore "examBanks", CHỈ đọc được qua
+ * admin-load (cần adminKey). "get-exam" trả về bản đã ẩn đáp án cho học sinh làm
+ * bài; "submit-result" nhận id lựa chọn học sinh đã chọn rồi TỰ CHẤM LẠI ở server
+ * dựa trên "examBanks" — xem chi tiết ở khối comment ngay trước actionGetExam_/
+ * actionSubmitResult_ phía dưới.
  *
  * ------------------------------------------------------------------------------------
  * CÀI ĐẶT (1 lần):
@@ -56,7 +63,8 @@ function cfg_(key) {
 // ---------------------------------------------------------------------------
 // doPost / doGet — điểm vào duy nhất của Web App
 // ---------------------------------------------------------------------------
-var PUBLIC_ACTIONS = ["submit-result"]; // không cần adminKey (học sinh nộp bài)
+// không cần adminKey: "get-exam" (tải đề đã ẩn đáp án) và "submit-result" (nộp bài, chấm ở server)
+var PUBLIC_ACTIONS = ["get-exam", "submit-result"];
 
 function doPost(e) {
   var body = {};
@@ -87,6 +95,9 @@ function doPost(e) {
         break;
       case "admin-save":
         result = actionAdminSave_(body);
+        break;
+      case "get-exam":
+        result = actionGetExam_(body);
         break;
       case "submit-result":
         result = actionSubmitResult_(body);
@@ -231,7 +242,10 @@ function fsFetch_(path, method, bodyObj) {
 // ---------------------------------------------------------------------------
 // admin-load — đọc 1 document hoặc cả collection
 // ---------------------------------------------------------------------------
-var ALLOWED_READ_COLLECTIONS = ["quizzes", "hosts", "emails", "results", "questionImages"];
+// "examBanks": mỗi document là 1 đề thi đã "chốt" (title, durationMinutes, questions[] —
+// questions[] giữ NGUYÊN đáp án đúng, chỉ admin (qua admin-load, có adminKey) mới đọc được
+// bản đầy đủ này. Học sinh chỉ thấy bản đã ẩn đáp án qua action "get-exam" (actionGetExam_).
+var ALLOWED_READ_COLLECTIONS = ["quizzes", "hosts", "emails", "results", "questionImages", "examBanks"];
 
 function actionAdminLoad_(body) {
   var collection = body.collection;
@@ -267,7 +281,7 @@ function actionAdminLoad_(body) {
 // ---------------------------------------------------------------------------
 // admin-save — tạo mới hoặc merge-update 1 document
 // ---------------------------------------------------------------------------
-var ALLOWED_WRITE_COLLECTIONS = ["quizzes", "hosts", "emails", "questionImages"];
+var ALLOWED_WRITE_COLLECTIONS = ["quizzes", "hosts", "emails", "questionImages", "examBanks"];
 
 function syncToSheet_(payload) {
   var webhookUrl;
@@ -342,25 +356,307 @@ function actionAdminSave_(body) {
 }
 
 // ---------------------------------------------------------------------------
-// submit-result (public, không cần adminKey) — chỉ đồng bộ sang Google Sheet,
-// giống hệt hành vi bản Cloud Functions cũ (không ghi "results" vào Firestore).
+// KIẾN TRÚC "ẨN ĐÁP ÁN KHỎI CLIENT" — get-exam + submit-result
+//
+// TRƯỚC ĐÂY: đáp án đúng của toàn bộ câu hỏi được NHÚNG THẲNG vào file HTML tĩnh
+// (biến QUIZ trong quiz.js/bai-kiem-tra.js) khi đẩy lên GitHub Pages — ai bấm
+// "View Page Source" cũng đọc được đáp án đúng, nên dù server có chấm lại điểm
+// "chuẩn" cỡ nào thì học sinh vẫn tự đọc đáp án rồi điền đúng hết được.
+//
+// BÂY GIỜ: 1 collection Firestore mới "examBanks" lưu bản ĐẦY ĐỦ (có đáp án) của
+// từng đề thi đã "chốt", CHỈ admin đọc được (qua admin-load, cần adminKey).
+// Học sinh gọi "get-exam" (public) để lấy bản đã ẩn đáp án — mỗi lựa chọn/mục
+// được gắn 1 "id" ổn định (vd "o0","o1","l0","r0"...) dựa theo vị trí gốc trong
+// Firestore. Học sinh làm bài, chọn/kéo-thả bằng các id này; khi nộp bài
+// ("submit-result") chỉ gửi id đã chọn cho từng câu — KHÔNG gửi điểm/số câu
+// đúng. Server tự đọc lại bản đầy đủ (bí mật) từ "examBanks" và chấm điểm dựa
+// trên id đó, nên sửa gì ở trình duyệt cũng không thể giả mạo điểm được nữa.
+//
+// LƯU Ý: phần này là "động cơ chấm điểm" phía server. Để hoạt động thật trên
+// trang thi, quiz.js/bai-kiem-tra.js cần được nối lại để: (1) gọi "get-exam"
+// thay vì dùng mảng QUIZ nhúng sẵn, (2) khi hiển thị lựa chọn thì giữ nguyên id
+// đính kèm dù có xáo trộn thứ tự hiển thị, (3) khi nộp bài thì gửi id đã chọn
+// (không tự tính điểm ở client nữa) — đây là phần việc kế tiếp, chưa nằm trong
+// bản vá này.
 // ---------------------------------------------------------------------------
-function actionSubmitResult_(body) {
-  var quizId = body.quizId;
-  if (!quizId || typeof quizId !== "string") {
-    return { status: "error", message: 'Thiếu "quizId".' };
-  }
-  var quizR = fsFetch_("/quizzes/" + encodeURIComponent(quizId), "get");
-  if (quizR.code === 404) return { status: "error", message: "Mã đề không tồn tại, không thể ghi kết quả." };
-  if (quizR.code !== 200) return { status: "error", message: "Lỗi máy chủ khi đọc Firestore: " + quizR.text };
+var RESULT_STRING_FIELDS = {
+  id: 50,
+  name: 100,
+  class: 50,
+  school: 150,
+  quizTitle: 200,
+  mode: 30,
+  classification: 60,
+  startTime: 40,
+};
 
-  var resultData = {};
-  Object.assign(resultData, body);
-  delete resultData.adminKey;
-  delete resultData.action;
-  var studentId = String(resultData.id || "").trim();
+function sanitizeSheetString_(v, maxLen) {
+  var s = v === null || v === undefined ? "" : String(v);
+  s = s.replace(/[\r\n\t]+/g, " ").trim();
+  if (maxLen && s.length > maxLen) s = s.slice(0, maxLen);
+  // Chuỗi bắt đầu bằng =, +, -, @ có thể bị Excel/Google Sheets hiểu nhầm thành
+  // công thức (formula injection) — thêm dấu nháy đơn phía trước để vô hiệu hoá.
+  if (/^[=+\-@]/.test(s)) s = "'" + s;
+  return s;
+}
+
+// --- Quy ước id: "<chữ cái tiền tố><chỉ số gốc>", vd "o3", "l0", "row2" —-----
+// chỉ cần bóc đúng phần số ở cuối là ra lại vị trí gốc trong mảng bí mật, nên
+// không cần bảng tra riêng: publicizeQuestion_ và gradeQuestion_ dùng CHUNG quy
+// ước này, chỉ khác chiều (gắn id / bóc id).
+function idIdx_(id) {
+  if (typeof id !== "string") return null;
+  var m = /(\d+)$/.exec(id);
+  if (!m) return null;
+  return parseInt(m[1], 10);
+}
+function tagWithIds_(arr, prefix, extraArr, extraKey) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map(function (item, i) {
+    var tagged = item && typeof item === "object" ? Object.assign({}, item) : { text: item };
+    tagged.id = prefix + i;
+    if (extraArr && extraArr[i] !== undefined && extraArr[i] !== null) tagged[extraKey] = extraArr[i];
+    return tagged;
+  });
+}
+
+// publicizeQuestion_(q) — trả về bản CÔNG KHAI của 1 câu hỏi: giữ nguyên nội
+// dung hiển thị (đề bài, ảnh, nhãn...), nhưng XOÁ mọi field lộ đáp án đúng và
+// gắn id ổn định cho từng lựa chọn/mục để client dùng khi ghi nhận câu trả lời.
+function publicizeQuestion_(q) {
+  var pub = Object.assign({}, q);
+  delete pub.explain; // chỉ trả lại sau khi nộp bài (đã hết thời gian gian lận)
+  switch (q.type) {
+    case "single":
+    case "multiple":
+      pub.options = tagWithIds_(q.options, "o", q.optionImages, "image");
+      delete pub.optionImages;
+      delete pub.answer;
+      break;
+    case "position":
+      pub.toolbar = tagWithIds_(q.toolbar, "o");
+      delete pub.answer;
+      break;
+    case "ordering":
+      pub.items = tagWithIds_(q.items, "i");
+      delete pub.answerOrder;
+      break;
+    case "matching":
+      pub.left = tagWithIds_(q.left, "l");
+      pub.right = tagWithIds_(q.right, "r");
+      delete pub.correctMap;
+      break;
+    case "list":
+      pub.items = (q.items || []).map(function (item, i) {
+        var it = Object.assign({}, item);
+        it.id = "row" + i;
+        it.options = tagWithIds_(item.options, "o");
+        delete it.answer;
+        return it;
+      });
+      break;
+    case "imagepoint":
+      pub.points = tagWithIds_(q.points, "p");
+      delete pub.answer;
+      break;
+    case "dragfill":
+    case "selectfill":
+      pub.options = tagWithIds_(q.options, "o");
+      pub.blankCount = Array.isArray(q.answer) ? q.answer.length : 0;
+      if (q.type === "selectfill" && Array.isArray(q.blankOptions)) {
+        pub.blankOptions = q.blankOptions.map(function (bo) {
+          if (Array.isArray(bo)) return bo.map(function (idx) { return "o" + idx; });
+          if (bo && Array.isArray(bo.allowed)) return Object.assign({}, bo, { allowed: bo.allowed.map(function (idx) { return "o" + idx; }) });
+          return bo;
+        });
+      }
+      delete pub.answer;
+      break;
+    case "classify":
+      pub.items = tagWithIds_(q.items, "i");
+      pub.distractors = tagWithIds_(q.distractors || [], "d");
+      delete pub.answer;
+      break;
+    case "classify2":
+      pub.items = tagWithIds_(q.items, "i");
+      delete pub.answer;
+      break;
+    default:
+      break;
+  }
+  return pub;
+}
+
+function actionGetExam_(body) {
+  var examId = body.examId;
+  if (!examId || typeof examId !== "string") {
+    return { status: "error", message: 'Thiếu "examId".' };
+  }
+  var r = fsFetch_("/examBanks/" + encodeURIComponent(examId), "get");
+  if (r.code === 404) return { status: "error", message: "Không tìm thấy đề thi." };
+  if (r.code !== 200) return { status: "error", message: "Lỗi máy chủ khi đọc Firestore: " + r.text };
+  var exam = fsDecodeFields_(r.json.fields);
+  var questions = Array.isArray(exam.questions) ? exam.questions : [];
+  return {
+    status: "ok",
+    data: {
+      examId: examId,
+      title: exam.title || "",
+      durationMinutes: exam.durationMinutes || null,
+      totalCount: questions.length,
+      questions: questions.map(publicizeQuestion_),
+    },
+  };
+}
+
+// gradeQuestion_(q, ua) — q là câu hỏi BÍ MẬT (đầy đủ đáp án, đọc từ Firestore
+// ngay tại server), ua là câu trả lời của học sinh dạng id (đúng như id server
+// đã gắn lúc publicizeQuestion_). Trả về điểm dạng phân số 0..1 — chỉ "matching"
+// và "list" được chấm theo tỉ lệ đúng từng phần, các loại còn lại đúng hết mới
+// tính điểm (giống hệt logic ATTEMPT/CORRECTNESS_CHECKERS phía client trước đây).
+function matchAcceptsIdx_(correctVal, idx) {
+  return Array.isArray(correctVal) ? correctVal.indexOf(idx) !== -1 : correctVal === idx;
+}
+function sortNums_(arr) {
+  return arr.slice().sort(function (a, b) { return a - b; });
+}
+function gradeQuestion_(q, ua) {
+  switch (q.type) {
+    case "single":
+    case "position":
+      return idIdx_(ua) === q.answer ? 1 : 0;
+    case "multiple": {
+      var picked = Array.isArray(ua) ? ua.map(idIdx_).filter(function (v) { return v !== null; }) : [];
+      return JSON.stringify(sortNums_(picked)) === JSON.stringify(sortNums_(q.answer || [])) ? 1 : 0;
+    }
+    case "ordering": {
+      var seq = Array.isArray(ua) ? ua.map(idIdx_) : [];
+      return JSON.stringify(seq) === JSON.stringify(q.answerOrder) ? 1 : 0;
+    }
+    case "matching": {
+      var pairs = ua && typeof ua === "object" ? ua : {};
+      var total = q.left.length;
+      var correctSub = 0;
+      for (var i = 0; i < total; i++) {
+        var rightIdx = idIdx_(pairs["l" + i]);
+        if (rightIdx !== null && matchAcceptsIdx_(q.correctMap[i], rightIdx)) correctSub++;
+      }
+      return total ? correctSub / total : 0;
+    }
+    case "list": {
+      var rowMap = ua && typeof ua === "object" ? ua : {};
+      var totalL = q.items.length;
+      var correctL = 0;
+      q.items.forEach(function (item, i) {
+        if (idIdx_(rowMap["row" + i]) === item.answer) correctL++;
+      });
+      return totalL ? correctL / totalL : 0;
+    }
+    case "imagepoint": {
+      if (Array.isArray(q.answer)) {
+        if (q.answerMode === "any") {
+          var pick = idIdx_(Array.isArray(ua) ? ua[0] : ua);
+          return q.answer.indexOf(pick) !== -1 ? 1 : 0;
+        }
+        var picks = Array.isArray(ua) ? ua.map(idIdx_) : [];
+        return JSON.stringify(sortNums_(picks)) === JSON.stringify(sortNums_(q.answer)) ? 1 : 0;
+      }
+      return idIdx_(Array.isArray(ua) ? ua[0] : ua) === q.answer ? 1 : 0;
+    }
+    case "dragfill":
+    case "selectfill": {
+      var placed = Array.isArray(ua) ? ua.map(idIdx_) : [];
+      if (q.orderIndependent === true || q.answerMode === "any") {
+        return JSON.stringify(sortNums_(placed)) === JSON.stringify(sortNums_(q.answer)) ? 1 : 0;
+      }
+      for (var k = 0; k < q.answer.length; k++) {
+        if (placed[k] !== q.answer[k]) return 0;
+      }
+      return 1;
+    }
+    case "classify":
+    case "classify2": {
+      var zoneMap = ua && typeof ua === "object" ? ua : {};
+      for (var j = 0; j < q.items.length; j++) {
+        if (Number(zoneMap["i" + j]) !== q.answer[j]) return 0;
+      }
+      return 1;
+    }
+    default:
+      return 0;
+  }
+}
+
+function scoreTier_(score) {
+  if (score >= 1000) return { passed: true, classification: "Xuất sắc" };
+  if (score >= 900) return { passed: true, classification: "Giỏi" };
+  if (score >= 800) return { passed: true, classification: "Khá" };
+  return { passed: false, classification: null };
+}
+
+function gradeExam_(questions, answersMap) {
+  var total = questions.length;
+  var pointsPerQuestion = total ? 1000 / total : 0;
+  var correctCount = 0;
+  var rawPoints = 0;
+  var perQuestion = [];
+  questions.forEach(function (q) {
+    var ua = answersMap ? answersMap[q.id] : undefined;
+    var frac = 0;
+    try {
+      frac = Number(gradeQuestion_(q, ua)) || 0;
+    } catch (e) {
+      frac = 0; // câu lỗi dữ liệu -> tính 0 điểm, không làm sập cả bài chấm
+    }
+    frac = Math.max(0, Math.min(1, frac));
+    var isFullyCorrect = frac >= 0.999999;
+    if (isFullyCorrect) correctCount++;
+    rawPoints += pointsPerQuestion * frac;
+    perQuestion.push({
+      id: q.id,
+      correct: isFullyCorrect,
+      partialPoints: Math.round(pointsPerQuestion * frac),
+      // Trả lại NGUYÊN VẸN câu hỏi (kèm đáp án đúng + giải thích) để trang làm
+      // bài dựng màn hình "xem lại" sau khi nộp — an toàn vì bài đã kết thúc.
+      correctData: q,
+    });
+  });
+  return { score: Math.round(rawPoints), correctCount: correctCount, totalCount: total, perQuestion: perQuestion };
+}
+
+function actionSubmitResult_(body) {
+  var examId = body.examId;
+  if (!examId || typeof examId !== "string") {
+    return { status: "error", message: 'Thiếu "examId".' };
+  }
+  var examR = fsFetch_("/examBanks/" + encodeURIComponent(examId), "get");
+  if (examR.code === 404) return { status: "error", message: "Không tìm thấy đề thi, không thể chấm và ghi kết quả." };
+  if (examR.code !== 200) return { status: "error", message: "Lỗi máy chủ khi đọc Firestore: " + examR.text };
+  var exam = fsDecodeFields_(examR.json.fields);
+  var questions = Array.isArray(exam.questions) ? exam.questions : [];
+  if (!questions.length) return { status: "error", message: "Đề thi không có câu hỏi." };
+
+  var answersMap = body.answers && typeof body.answers === "object" && !Array.isArray(body.answers) ? body.answers : {};
+  var graded = gradeExam_(questions, answersMap);
+  var tier = scoreTier_(graded.score);
+
+  var studentId = sanitizeSheetString_(body.id, RESULT_STRING_FIELDS.id);
   if (!studentId) return { status: "error", message: "Thiếu ID học sinh, không thể ghi kết quả." };
-  resultData.id = studentId;
+
+  var resultData = {
+    id: studentId,
+    name: sanitizeSheetString_(body.name, RESULT_STRING_FIELDS.name),
+    class: sanitizeSheetString_(body.class, RESULT_STRING_FIELDS.class),
+    school: sanitizeSheetString_(body.school, RESULT_STRING_FIELDS.school),
+    quizTitle: sanitizeSheetString_(body.quizTitle || exam.title, RESULT_STRING_FIELDS.quizTitle),
+    mode: sanitizeSheetString_(body.mode, RESULT_STRING_FIELDS.mode),
+    classification: sanitizeSheetString_(tier.classification, RESULT_STRING_FIELDS.classification),
+    startTime: sanitizeSheetString_(body.startTime, RESULT_STRING_FIELDS.startTime),
+    score: graded.score + "/1000",
+    correctCount: graded.correctCount,
+    totalCount: graded.totalCount,
+    passed: tier.passed,
+  };
   var nopLuc = new Date().toISOString();
 
   var sheetPayload = { sheet: "results" };
@@ -370,7 +666,15 @@ function actionSubmitResult_(body) {
   if (!sheetResult.ok) {
     return { status: "error", message: "Không ghi được kết quả vào Google Sheet: " + sheetResult.reason };
   }
-  return { status: "ok" };
+  return {
+    status: "ok",
+    score: resultData.score,
+    correctCount: graded.correctCount,
+    totalCount: graded.totalCount,
+    passed: tier.passed,
+    classification: tier.classification,
+    review: graded.perQuestion,
+  };
 }
 
 // ---------------------------------------------------------------------------
