@@ -44,3 +44,9 @@ html[data-theme=dark] body.pre-start .header{background:rgba(20,23,31,.92);borde
 }
 
 #fullscreenExitModal{background:#05060a!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+
+/* Hình nền: neo ĐÁY thay vì neo đỉnh -> các nhân vật ở đáy ảnh không còn bị cắt/đẩy xuống khi màn hình rộng.
+   Muốn chỉnh: đổi giá trị --quiz-bg-pos (vd "center 90%" nếu muốn nhích xuống một chút). */
+:root{--quiz-bg-pos:center bottom}
+body:not(.pre-start){background-position:var(--quiz-bg-pos)}
+html[data-theme=dark] body.pre-start{background-position:var(--quiz-bg-pos)}
