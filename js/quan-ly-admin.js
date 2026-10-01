@@ -1736,14 +1736,15 @@ function buildUpdatedHtml(
     const escLabel = (s) =>
       String(s || "")
         .replace(/\\/g, "\\\\")
-        .replace(/"/g, '\\"');
+        .replace(/"/g, '\\"')
+        .replace(/<\//g, "<\\/");
     html = html.replace(
       /const\s+QUIZ_LEVEL_LABEL\s*=\s*"[^"]*";/,
-      'const QUIZ_LEVEL_LABEL = "' + escLabel(levelLabel) + '";',
+      () => 'const QUIZ_LEVEL_LABEL = "' + escLabel(levelLabel) + '";',
     );
     html = html.replace(
       /const\s+QUIZ_TOPIC_LABEL\s*=\s*"[^"]*";/,
-      'const QUIZ_TOPIC_LABEL = "' + escLabel(topicLabel) + '";',
+      () => 'const QUIZ_TOPIC_LABEL = "' + escLabel(topicLabel) + '";',
     );
   }
   if (examDurationMinutes != null) {
@@ -1762,7 +1763,16 @@ function buildUpdatedHtml(
   function replaceArrayLiteral(source, varName, innerText, notFoundMessage) {
     const re = new RegExp("const\\s+" + varName + "\\s*=\\s*\\[[\\s\\S]*?\\n?\\];");
     if (!re.test(source)) throw new Error(notFoundMessage);
-    return source.replace(re, "const " + varName + " = [" + innerText + "];");
+    // Dữ liệu (câu hỏi...) có thể chứa "$&", "$$", "$'"...: PHẢI thay bằng hàm, nếu truyền chuỗi
+    // thì JS sẽ diễn giải các mẫu đó và làm hỏng nội dung câu hỏi.
+    // Đồng thời "</" -> "<\/" để chuỗi "</script>" trong câu hỏi không kết thúc sớm thẻ <script>.
+    const safeInner = String(innerText)
+      .replace(/<\//g, "<\\/")
+      .replace(/<!--/g, "<\\!--");
+    return source.replace(
+      re,
+      () => "const " + varName + " = [" + safeInner + "];",
+    );
   }
   html = replaceArrayLiteral(
     html,
@@ -1793,7 +1803,7 @@ function buildUpdatedHtml(
     const safeUrl = WEB_APP_URL.replace(/"/g, '\\"');
     html = html.replace(
       /webAppUrl\s*:\s*(["'`]).*?\1/,
-      'webAppUrl: "' + safeUrl + '"',
+      () => 'webAppUrl: "' + safeUrl + '"',
     );
     html = html.replace(
       /(const\s+CLASS_SHEET_CONFIG\s*=\s*\{\s*\n\s*enabled\s*:\s*)(true|false)/,
@@ -2498,8 +2508,8 @@ async function fetchTemplateSource(mode) {
       `Không tìm thấy thẻ <script src="${files.js}"></script> trong ${files.html} — kiểm tra lại đường dẫn JS trong file này.`,
     );
   return html
-    .replace(linkTag, `<style>\n${css}\n</style>`)
-    .replace(scriptTag, `<script>\n${js}\n</script>`);
+    .replace(linkTag, () => `<style>\n${css}\n</style>`)
+    .replace(scriptTag, () => `<script>\n${js}\n</script>`);
 }
 function getCustomTopicLabel() {
   const el = document.getElementById("customTopicLabelInput");

@@ -775,7 +775,12 @@ function requestFullscreenSafe() {
   }
 }
 function showFullscreenExitModal() {
-  document.getElementById("fullscreenExitModal").style.display = "flex";
+  const m = document.getElementById("fullscreenExitModal");
+  // Nền ĐEN đặc, che kín toàn bộ bài làm (ép !important để không luật CSS nào đè được).
+  m.style.setProperty("background", "#05060a", "important");
+  m.style.setProperty("backdrop-filter", "none", "important");
+  m.style.setProperty("-webkit-backdrop-filter", "none", "important");
+  m.style.display = "flex";
 }
 function hideFullscreenExitModal() {
   document.getElementById("fullscreenExitModal").style.display = "none";
