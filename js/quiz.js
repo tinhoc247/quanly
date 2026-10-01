@@ -79,7 +79,7 @@ const THEME_SUN_ICON =
 const CLASS_SHEET_CONFIG = {
   enabled: true,
   webAppUrl:
-    "https://script.google.com/macros/s/AKfycbwAqMGtP5d5qVOfbAX1_CBd6TZgFBEyo-9OEcF1eYY_tQBw8b-rAt7cS4SGhcIT3GArYw/exec",
+    "",
 };
 const DEMO_TOOLBAR_IMG =
   "data:image/svg+xml;utf8," +
@@ -810,7 +810,12 @@ function requestFullscreenSafe() {
   }
 }
 function showFullscreenExitModal() {
-  document.getElementById("fullscreenExitModal").style.display = "flex";
+  const m = document.getElementById("fullscreenExitModal");
+  // Nền ĐEN đặc, che kín toàn bộ bài làm (ép !important để không luật CSS nào đè được).
+  m.style.setProperty("background", "#05060a", "important");
+  m.style.setProperty("backdrop-filter", "none", "important");
+  m.style.setProperty("-webkit-backdrop-filter", "none", "important");
+  m.style.display = "flex";
 }
 function hideFullscreenExitModal() {
   document.getElementById("fullscreenExitModal").style.display = "none";
@@ -831,12 +836,29 @@ function disableFullscreenLock() {
 ].forEach((evt) => {
   document.addEventListener(evt, () => {
     if (!fullscreenRequired) return;
-    if (isFullscreenActive()) hideFullscreenExitModal();
+    if (isFullscreenActive() && !isExamWindowAway()) hideFullscreenExitModal();
     else showFullscreenExitModal();
   });
 });
+// Học sinh thu nhỏ cửa sổ / chuyển tab / chuyển sang ứng dụng khác:
+// phủ nền đen kín màn hình và hiện thông báo "Chú ý" (cùng modal với thoát toàn màn hình).
+function isExamWindowAway() {
+  return document.hidden || !document.hasFocus();
+}
+function checkExamWindowAway() {
+  if (!fullscreenRequired) return;
+  if (isExamWindowAway() || !isFullscreenActive()) showFullscreenExitModal();
+}
+window.addEventListener("blur", checkExamWindowAway);
+document.addEventListener("visibilitychange", checkExamWindowAway);
 document.getElementById("fullscreenExitRetryBtn").onclick = () => {
-  requestFullscreenSafe();
+  if (isFullscreenActive()) {
+    // Vẫn đang toàn màn hình (chỉ mất focus/chuyển tab) -> quay lại bài ngay.
+    window.focus();
+    hideFullscreenExitModal();
+    return;
+  }
+  requestFullscreenSafe(); // vào lại toàn màn hình -> sự kiện fullscreenchange sẽ ẩn modal
 };
 document.getElementById("resultModalCloseBtn").onclick = () => {
   document.getElementById("resultModal").style.display = "none";
@@ -2796,12 +2818,16 @@ function formatStartTime(ts) {
    - Kết quả được lưu vào localStorage TRƯỚC khi gửi, chỉ xóa khi server xác nhận. */
 const SHEET_PENDING_KEY = "ic3_pending_results_v1";
 const SHEET_TIMEOUT_MS = 30000;
-const SHEET_MAX_AUTO_TRIES = 8;
+// Gửi lại KHÔNG giới hạn số lần cho tới khi server trả ok (khoảng cách tăng dần, tối đa 45 giây).
+const SHEET_MAX_RETRY_DELAY_MS = 45000;
+// Sau bấy nhiêu lần thất bại liên tiếp thì hiện cảnh báo mạnh "đừng đóng trang".
+const SHEET_WARN_AFTER_TRIES = 2;
 let sheetQueue = [];
 let sheetFlushing = false;
 let sheetRetryTimer = null;
 let sheetAutoTries = 0;
 let sheetStatusHideTimer = null;
+let sheetLastItem = null; // lần nộp gần nhất (để hiện mã + tải bản dự phòng)
 
 function sheetLoadPending() {
   try {
@@ -2829,7 +2855,111 @@ function sheetBuildBody(payload) {
   Object.keys(payload).forEach((k) => body.append(k, String(payload[k])));
   return body;
 }
+function sheetShortCode(sid) {
+  return String(sid || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase();
+}
+const SHEET_STATUS_COLORS = {
+  sending: ["#eef4ff", "#1e3a8a"],
+  ok: ["#e6f6ec", "#14532d"],
+  warn: ["#fff4d6", "#7a4b00"],
+  fail: ["#fde8e8", "#8a1c1c"],
+};
+/* Bản dự phòng: học sinh tải file .txt, giáo viên có thể nhập tay nếu mạng hỏng hẳn. */
+function sheetDownloadBackup() {
+  const it = sheetLastItem || sheetQueue[0];
+  if (!it) return;
+  const p = it.payload;
+  const code = sheetShortCode(p.sid);
+  const lines = [
+    "KẾT QUẢ BÀI LÀM (BẢN DỰ PHÒNG)",
+    "Mã bài nộp: " + code,
+    "Họ tên: " + (p.name || ""),
+    "ID: " + (p.id || ""),
+    "Lớp: " + (p.class || ""),
+    "Trường: " + (p.school || ""),
+    "Bài: " + (p.quizTitle || ""),
+    "Loại bài: " + (p.mode || ""),
+    "Điểm: " + (p.score || ""),
+    "Xếp loại: " + (p.classification || ""),
+    "Kết quả: " + (String(p.passed) === "true" ? "Đạt" : "Chưa đạt"),
+    "Số câu đúng: " + p.correctCount + "/" + p.totalCount,
+    "Bắt đầu lúc: " + (p.startTime || ""),
+    "Nộp lúc: " + (p.submittedAt || ""),
+    "",
+    "---JSON---",
+    JSON.stringify(p),
+  ];
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], {
+    type: "text/plain;charset=utf-8",
+  });
+  const safeName =
+    String(p.name || "hocsinh")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/gi, "d")
+      .replace(/[^a-zA-Z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "hocsinh";
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ketqua_" + safeName + "_" + code + ".txt";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(a.href);
+    a.remove();
+  }, 1500);
+}
+/* Khung trạng thái gửi NẰM TRONG thẻ kết quả (không tự ẩn) - học sinh luôn thấy
+   bài đã được server xác nhận hay chưa, kèm mã bài nộp để làm bằng chứng. */
+function sheetRenderBadge(kind, text, showRetryBtn) {
+  const card = document.querySelector("#mainCard .result-card");
+  if (!card || !sheetLastItem) return;
+  let el = document.getElementById("sheetSyncBadge");
+  if (el && !card.contains(el)) {
+    el.remove();
+    el = null;
+  }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "sheetSyncBadge";
+    el.setAttribute("role", "status");
+    el.style.cssText =
+      "margin:16px auto 0;max-width:460px;padding:12px 14px;border-radius:12px;" +
+      "font:600 14px/1.5 system-ui,sans-serif;text-align:center;";
+    card.appendChild(el);
+  }
+  const c = SHEET_STATUS_COLORS[kind] || SHEET_STATUS_COLORS.sending;
+  el.style.background = c[0];
+  el.style.color = c[1];
+  el.textContent = "";
+  const msg = document.createElement("div");
+  msg.textContent = text;
+  el.appendChild(msg);
+  const p = sheetLastItem.payload;
+  const info = document.createElement("div");
+  info.style.cssText = "font-weight:500;font-size:13px;margin-top:4px;opacity:.9;";
+  info.textContent =
+    "Mã bài nộp: " + sheetShortCode(p.sid) + (p.submittedAt ? " · Nộp lúc: " + p.submittedAt : "");
+  el.appendChild(info);
+  const row = document.createElement("div");
+  row.style.cssText =
+    "display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px;";
+  const mkBtn = (label, handler, primary) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.style.cssText =
+      "border:0;border-radius:8px;padding:6px 12px;font:inherit;cursor:pointer;" +
+      (primary ? "background:#8a1c1c;color:#fff;" : "background:rgba(0,0,0,.08);color:inherit;");
+    b.onclick = handler;
+    return b;
+  };
+  if (showRetryBtn) row.appendChild(mkBtn("Gửi lại ngay", () => sheetFlush(true), true));
+  row.appendChild(mkBtn("💾 Lưu bản dự phòng", sheetDownloadBackup, false));
+  el.appendChild(row);
+}
 function sheetSetStatus(kind, text, showRetryBtn) {
+  sheetRenderBadge(kind, text, showRetryBtn);
   let el = document.getElementById("sheetSyncStatus");
   if (!el) {
     el = document.createElement("div");
@@ -2841,13 +2971,7 @@ function sheetSetStatus(kind, text, showRetryBtn) {
       "box-shadow:0 4px 16px rgba(0,0,0,.18);display:flex;gap:10px;align-items:center;";
     document.body.appendChild(el);
   }
-  const colors = {
-    sending: ["#eef4ff", "#1e3a8a"],
-    ok: ["#e6f6ec", "#14532d"],
-    warn: ["#fff4d6", "#7a4b00"],
-    fail: ["#fde8e8", "#8a1c1c"],
-  };
-  const c = colors[kind] || colors.sending;
+  const c = SHEET_STATUS_COLORS[kind] || SHEET_STATUS_COLORS.sending;
   el.style.background = c[0];
   el.style.color = c[1];
   el.textContent = text;
@@ -2887,7 +3011,10 @@ async function sheetPost(item) {
       signal: ctrl.signal,
     });
     const data = await res.json();
-    return data && data.status === "ok" ? "ok" : "retry";
+    // "duplicate" = server đã có bài này từ lần gửi trước (mất phản hồi) -> coi như đã ghi.
+    return data && (data.status === "ok" || data.status === "duplicate")
+      ? "ok"
+      : "retry";
   } catch (err) {
     return "retry";
   } finally {
@@ -2901,7 +3028,7 @@ async function sheetFlush(manual) {
   sheetFlushing = true;
   clearTimeout(sheetRetryTimer);
   if (manual) sheetAutoTries = 0;
-  sheetSetStatus("sending", "⏳ Đang gửi…");
+  sheetSetStatus("sending", "⏳ Đang gửi kết quả… Vui lòng KHÔNG đóng trang.");
   let failed = false;
   while (sheetQueue.length) {
     const r = await sheetPost(sheetQueue[0]);
@@ -2915,29 +3042,43 @@ async function sheetFlush(manual) {
   sheetFlushing = false;
   if (!failed) {
     sheetAutoTries = 0;
-    sheetSetStatus("ok", "✅ Đã ghi kết quả");
+    sheetSetStatus("ok", "✅ Đã ghi nhận kết quả — giáo viên đã nhận được bài của bạn.");
     return;
   }
+  // KHÔNG bỏ cuộc: tiếp tục tự thử lại cho tới khi server xác nhận.
   sheetAutoTries++;
-  if (sheetAutoTries >= SHEET_MAX_AUTO_TRIES) {
+  const delay =
+    Math.min(
+      SHEET_MAX_RETRY_DELAY_MS,
+      3000 * Math.pow(2, Math.min(sheetAutoTries, 8) - 1),
+    ) + Math.floor(Math.random() * 1500);
+  if (sheetAutoTries >= SHEET_WARN_AFTER_TRIES) {
     sheetSetStatus(
       "fail",
-      "❌ Chưa ghi được kết quả. Kết quả vẫn được lưu trên máy.",
+      "❌ Chưa gửi được kết quả (mạng yếu hoặc máy chủ chậm). ĐỪNG đóng trang — hệ thống đang tự thử lại (lần " +
+        sheetAutoTries +
+        ").",
       true,
     );
-    return;
+  } else {
+    sheetSetStatus("warn", "⚠️ Chưa gửi được, đang thử lại…", true);
   }
-  const delay =
-    Math.min(60000, 3000 * Math.pow(2, sheetAutoTries - 1)) +
-    Math.floor(Math.random() * 1500);
-  sheetSetStatus("warn", "⚠️ Chưa gửi được, đang thử lại…");
   sheetRetryTimer = setTimeout(() => sheetFlush(false), delay);
 }
 function sheetEnqueue(payload) {
-  sheetQueue.push({ payload: payload, savedAt: Date.now() });
+  const item = { payload: payload, savedAt: Date.now() };
+  sheetLastItem = item;
+  sheetQueue.push(item);
   sheetPersist(); // lưu bản sao TRƯỚC khi gửi
   sheetFlush(true);
 }
+// Cảnh báo khi học sinh đóng/tải lại trang lúc kết quả CHƯA được server xác nhận.
+window.addEventListener("beforeunload", (e) => {
+  if (!sheetQueue.length) return;
+  e.preventDefault();
+  e.returnValue = "Kết quả bài làm chưa được gửi xong. Bạn có chắc muốn thoát?";
+  return e.returnValue;
+});
 (function initSheetSync() {
   sheetQueue = sheetLoadPending();
   if (sheetQueue.length) setTimeout(() => sheetFlush(true), 1500); // kết quả còn sót từ lần trước
