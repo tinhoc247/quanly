@@ -43,4 +43,4 @@ html[data-theme=dark] body.pre-start .header{background:rgba(20,23,31,.92);borde
   .theme-switch{width:42px!important;flex-basis:42px!important;height:23px!important;}
 }
 
-#fullscreenExitModal{background:#05060a;backdrop-filter:none;-webkit-backdrop-filter:none}
+#fullscreenExitModal{background:#05060a!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
