@@ -1722,16 +1722,6 @@ function importMergedListFromExcel(file) {
   };
   reader.readAsArrayBuffer(file);
 }
-async function b64GzipToUtf8(b64) {
-  const binary = atob(b64.trim());
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const stream = new Blob([bytes])
-    .stream()
-    .pipeThrough(new DecompressionStream("gzip"));
-  const buf = await new Response(stream).arrayBuffer();
-  return new TextDecoder("utf-8").decode(buf);
-}
 function buildUpdatedHtml(
   template,
   quiz,
@@ -1764,61 +1754,40 @@ function buildUpdatedHtml(
         "const EXAM_DURATION_MINUTES = " + n + ";",
       );
   }
-  {
-    const startMarker = "const QUIZ = [";
-    const startIdx = html.indexOf(startMarker);
-    const endIdx =
-      startIdx !== -1
-        ? html.indexOf("\n];", startIdx + startMarker.length)
-        : -1;
-    if (startIdx === -1 || endIdx === -1)
-      throw new Error("Không tìm thấy vị trí dữ liệu câu hỏi trong khuôn mẫu.");
-    const innerText =
-      "\n" + quiz.map((q) => JSON.stringify(q, null, 2)).join(",\n") + "\n";
-    html =
-      html.slice(0, startIdx + startMarker.length) +
-      innerText +
-      html.slice(endIdx);
+  // Thay nội dung 1 khai báo mảng "const NAME = [ ... ];" bằng innerText, bất kể mảng gốc
+  // trong khuôn mẫu đang rỗng trên 1 dòng (const NAME = [];) hay đã có sẵn dữ liệu trải
+  // nhiều dòng — quiz.js/bai-kiem-tra.js hiện khai báo QUIZ/CLASS_LIST rỗng dạng "[];" nên
+  // không thể giả định luôn có "\n];" ngay sau, khác với cách tìm chuỗi cũ (dễ tìm nhầm
+  // sang dấu "];" của đoạn code khác ở xa hơn và âm thầm làm hỏng nội dung ở giữa).
+  function replaceArrayLiteral(source, varName, innerText, notFoundMessage) {
+    const re = new RegExp("const\\s+" + varName + "\\s*=\\s*\\[[\\s\\S]*?\\n?\\];");
+    if (!re.test(source)) throw new Error(notFoundMessage);
+    return source.replace(re, "const " + varName + " = [" + innerText + "];");
   }
+  html = replaceArrayLiteral(
+    html,
+    "QUIZ",
+    "\n" + quiz.map((q) => JSON.stringify(q, null, 2)).join(",\n") + "\n",
+    "Không tìm thấy vị trí dữ liệu câu hỏi trong khuôn mẫu.",
+  );
+  html = replaceArrayLiteral(
+    html,
+    "SCHOOL_LIST",
+    "\n" + schoolList.map((name) => JSON.stringify(name)).join(",\n") + "\n",
+    "Không tìm thấy vị trí danh sách trường trong khuôn mẫu.",
+  );
   {
-    const startMarker = "const SCHOOL_LIST = [";
-    const startIdx = html.indexOf(startMarker);
-    const endIdx =
-      startIdx !== -1
-        ? html.indexOf("\n];", startIdx + startMarker.length)
-        : -1;
-    if (startIdx === -1 || endIdx === -1)
-      throw new Error(
-        "Không tìm thấy vị trí danh sách trường trong khuôn mẫu.",
-      );
-    const innerText =
-      "\n" + schoolList.map((name) => JSON.stringify(name)).join(",\n") + "\n";
-    html =
-      html.slice(0, startIdx + startMarker.length) +
-      innerText +
-      html.slice(endIdx);
-  }
-  {
-    const startMarker = "const CLASS_LIST = [";
-    const startIdx = html.indexOf(startMarker);
-    const endIdx =
-      startIdx !== -1
-        ? html.indexOf("\n];", startIdx + startMarker.length)
-        : -1;
-    if (startIdx === -1 || endIdx === -1)
-      throw new Error(
-        "Không tìm thấy vị trí danh sách học sinh trong khuôn mẫu.",
-      );
     const normalizedClassList = normalizeClassListIds(classList || []);
-    const innerText = normalizedClassList.length
-      ? "\n" +
-        normalizedClassList.map((row) => JSON.stringify(row)).join(",\n") +
-        "\n"
-      : "\n";
-    html =
-      html.slice(0, startIdx + startMarker.length) +
-      innerText +
-      html.slice(endIdx);
+    html = replaceArrayLiteral(
+      html,
+      "CLASS_LIST",
+      normalizedClassList.length
+        ? "\n" +
+          normalizedClassList.map((row) => JSON.stringify(row)).join(",\n") +
+          "\n"
+        : "\n",
+      "Không tìm thấy vị trí danh sách học sinh trong khuôn mẫu.",
+    );
   }
   if (WEB_APP_URL) {
     const safeUrl = WEB_APP_URL.replace(/"/g, '\\"');
@@ -2474,22 +2443,70 @@ function showNetlifyLink(label, url) {
   };
   list.prepend(row);
 }
-function applyQuizMode(template, mode) {
-  if (mode !== "kiemtra") return template;
-  const marker = 'const QUIZ_MODE = "onluyen";';
-  if (template.indexOf(marker) === -1)
+// Nguồn khuôn mẫu cho từng mode — không còn dùng 1 blob tplUnifiedB64 nhúng sẵn (đã lệch
+// hẳn so với js/quiz.js và js/bai-kiem-tra.js thật, vì 2 file giờ đã tách riêng chứ không
+// còn dùng chung 1 template với cờ QUIZ_MODE). Thay vào đó, fetch() thẳng 3 file nguồn
+// (html/css/js) tương ứng mỗi lần "Tạo bộ đề" — luôn tự động khớp với bản đang host cùng
+// quan-ly-admin.html, không cần bake tay nữa. Yêu cầu: quiz.html/bai-kiem-tra.html và các
+// thư mục css/ js/ phải được host CÙNG origin với quan-ly-admin.html (đường dẫn tương đối).
+const TEMPLATE_SOURCE_FILES = {
+  onluyen: { html: "quiz.html", css: "css/quiz.css", js: "js/quiz.js" },
+  kiemtra: {
+    html: "bai-kiem-tra.html",
+    css: "css/bai-kiem-tra.css",
+    js: "js/bai-kiem-tra.js",
+  },
+};
+async function fetchTemplateSource(mode) {
+  const files = TEMPLATE_SOURCE_FILES[mode];
+  if (!files) throw new Error(`Không có khuôn mẫu cho mode "${mode}".`);
+  let htmlRes, cssRes, jsRes;
+  try {
+    [htmlRes, cssRes, jsRes] = await Promise.all([
+      fetch(files.html, { cache: "no-store" }),
+      fetch(files.css, { cache: "no-store" }),
+      fetch(files.js, { cache: "no-store" }),
+    ]);
+  } catch (err) {
     throw new Error(
-      'Không tìm thấy dòng const QUIZ_MODE = "onluyen"; trong khuôn mẫu — kiểm tra lại nội dung đã dán vào tplUnifiedB64.',
+      `Không tải được khuôn mẫu (${files.html}/${files.css}/${files.js}) — kiểm tra quan-ly-admin.html có đang được host cùng thư mục với các file này không. Lỗi: ${err.message}`,
     );
-  return template.replace(marker, 'const QUIZ_MODE = "kiemtra";');
+  }
+  for (const [res, path] of [
+    [htmlRes, files.html],
+    [cssRes, files.css],
+    [jsRes, files.js],
+  ]) {
+    if (!res.ok)
+      throw new Error(
+        `Không tải được "${path}" (HTTP ${res.status}) — kiểm tra file này có được host cùng nơi với trang quản lý không.`,
+      );
+  }
+  const [html, css, js] = await Promise.all([
+    htmlRes.text(),
+    cssRes.text(),
+    jsRes.text(),
+  ]);
+  const linkTag = `<link rel="stylesheet" href="${files.css}">`;
+  const scriptTag = `<script src="${files.js}"></script>`;
+  if (html.indexOf(linkTag) === -1)
+    throw new Error(
+      `Không tìm thấy thẻ <link rel="stylesheet" href="${files.css}"> trong ${files.html} — kiểm tra lại đường dẫn CSS trong file này.`,
+    );
+  if (html.indexOf(scriptTag) === -1)
+    throw new Error(
+      `Không tìm thấy thẻ <script src="${files.js}"></script> trong ${files.html} — kiểm tra lại đường dẫn JS trong file này.`,
+    );
+  return html
+    .replace(linkTag, `<style>\n${css}\n</style>`)
+    .replace(scriptTag, `<script>\n${js}\n</script>`);
 }
 function getCustomTopicLabel() {
   const el = document.getElementById("customTopicLabelInput");
   return el ? el.value.trim() : "";
 }
 async function buildStudentHtml(mode, quizForSet, setIndex, setTotal) {
-  const b64 = document.getElementById("tplUnifiedB64").textContent;
-  const template = applyQuizMode(await b64GzipToUtf8(b64), mode);
+  const template = await fetchTemplateSource(mode);
   const customLabel = getCustomTopicLabel();
   let topicLabel = customLabel || selectedTopicsLabel();
   if (setTotal > 1 && setIndex) topicLabel = topicLabel + ` (T${setIndex})`;
