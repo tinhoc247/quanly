@@ -2594,6 +2594,7 @@ const SHEET_WARN_AFTER_TRIES = 2;
 let sheetQueue = [];
 let sheetFlushing = false;
 let sheetRetryTimer = null;
+let sheetLastError = "";
 let sheetAutoTries = 0;
 let sheetStatusHideTimer = null;
 let sheetLastItem = null; // lần nộp gần nhất (để hiện mã + tải bản dự phòng)
@@ -2728,6 +2729,7 @@ function sheetRenderBadge(kind, text, showRetryBtn) {
   el.appendChild(row);
 }
 function sheetSetStatus(kind, text, showRetryBtn) {
+  if (!sheetLastItem) return; // chỉ báo trạng thái cho bài vừa nộp; bài cũ còn sót gửi ngầm
   sheetRenderBadge(kind, text, showRetryBtn);
   let el = document.getElementById("sheetSyncStatus");
   if (!el) {
@@ -2765,7 +2767,8 @@ function sheetSetStatus(kind, text, showRetryBtn) {
    lỗi mạng, hết giờ, server busy/error, không đọc được phản hồi -> coi như CHƯA ghi,
    gửi lại cùng sid; server nhận ra sid cũ nên không ghi trùng). */
 async function sheetPost(item) {
-  const url = CLASS_SHEET_CONFIG.webAppUrl;
+  // Mỗi bài gửi về ĐÚNG link đã gắn lúc nộp (không lẫn sang link khác).
+  const url = item.url || CLASS_SHEET_CONFIG.webAppUrl;
   const body = sheetBuildBody(item.payload);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), SHEET_TIMEOUT_MS);
@@ -2779,42 +2782,91 @@ async function sheetPost(item) {
       redirect: "follow",
       signal: ctrl.signal,
     });
-    const data = await res.json();
-    // "duplicate" = server đã có bài này từ lần gửi trước (mất phản hồi) -> coi như đã ghi.
-    return data && (data.status === "ok" || data.status === "duplicate")
-      ? "ok"
-      : "retry";
+    sheetLastError = "";
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      sheetLastError = "máy chủ không trả JSON (HTTP " + res.status + ") — kiểm tra link/quyền truy cập của Web App";
+      return "retry";
+    }
+    if (data && (data.status === "ok" || data.status === "duplicate")) return "ok";
+    sheetLastError = (data && (data.message || data.status)) || "";
+    // "error" = server NHẬN được nhưng từ chối bài này (gửi lại cũng vô ích) -> không để chặn các bài sau.
+    return data && data.status === "error" ? "error" : "retry";
   } catch (err) {
+    sheetLastError = "lỗi mạng/CORS: " + (err && err.message ? err.message : err);
     return "retry";
   } finally {
     clearTimeout(timer);
   }
 }
+const SHEET_FAILED_KEY = "ic3_failed_results_v1";
+const SHEET_MAX_SERVER_ERRORS = 5;
+function sheetMoveToFailed(item) {
+  try {
+    const list = JSON.parse(localStorage.getItem(SHEET_FAILED_KEY) || "[]");
+    list.push(item);
+    localStorage.setItem(SHEET_FAILED_KEY, JSON.stringify(list));
+  } catch (e) {}
+}
 async function sheetFlush(manual) {
   if (sheetFlushing) return;
-  if (!CLASS_SHEET_CONFIG.enabled || !CLASS_SHEET_CONFIG.webAppUrl) return;
+  if (!CLASS_SHEET_CONFIG.enabled) return;
   if (!sheetQueue.length) return;
+  // Bài còn sót từ bản/phiên cũ chưa có link riêng -> gắn link hiện tại.
+  sheetQueue.forEach((it) => {
+    if (!it.url) it.url = CLASS_SHEET_CONFIG.webAppUrl;
+  });
+  if (!sheetQueue.some((it) => it.url)) return;
   sheetFlushing = true;
   clearTimeout(sheetRetryTimer);
   if (manual) sheetAutoTries = 0;
   sheetSetStatus("sending", "⏳ Đang gửi kết quả… Vui lòng KHÔNG đóng trang.");
   let failed = false;
-  while (sheetQueue.length) {
-    const r = await sheetPost(sheetQueue[0]);
-    if (r !== "ok") {
-      failed = true; // chỉ xóa khỏi hàng đợi khi server trả ok
-      break;
+  let gaveUp = false;
+  const badUrls = {};
+  // Duyệt từng bài: 1 bài lỗi KHÔNG được chặn các bài phía sau.
+  for (const item of sheetQueue.slice()) {
+    if (!item.url || badUrls[item.url]) {
+      failed = true;
+      continue;
     }
-    sheetQueue.shift();
+    const r = await sheetPost(item);
+    if (r === "ok") {
+      sheetQueue = sheetQueue.filter((x) => x !== item);
+      sheetPersist();
+      continue;
+    }
+    if (r === "error") {
+      item.errCount = (item.errCount || 0) + 1;
+      if (item.errCount >= SHEET_MAX_SERVER_ERRORS) {
+        // Server từ chối nhiều lần -> cất sang kho riêng, ngừng thử lại để khỏi kẹt mãi.
+        sheetQueue = sheetQueue.filter((x) => x !== item);
+        sheetMoveToFailed(item);
+        gaveUp = true;
+        sheetPersist();
+        continue;
+      }
+    } else {
+      badUrls[item.url] = true; // mạng/link hỏng: khỏi thử tiếp các bài cùng link trong lượt này
+    }
+    failed = true;
     sheetPersist();
   }
   sheetFlushing = false;
   if (!failed) {
     sheetAutoTries = 0;
-    sheetSetStatus("ok", "✅ Đã ghi nhận kết quả — giáo viên đã nhận được bài của bạn.");
+    if (gaveUp)
+      sheetSetStatus(
+        "fail",
+        "❌ Máy chủ từ chối bài này" + (sheetLastError ? " (" + sheetLastError + ")" : "") +
+          ". Bấm 💾 Lưu bản dự phòng và báo giáo viên.",
+      );
+    else sheetSetStatus("ok", "✅ Đã ghi nhận kết quả — giáo viên đã nhận được bài của bạn.");
     return;
   }
-  // KHÔNG bỏ cuộc: tiếp tục tự thử lại cho tới khi server xác nhận.
+  // Còn bài chưa gửi được: tiếp tục tự thử lại.
   sheetAutoTries++;
   const delay =
     Math.min(
@@ -2826,7 +2878,7 @@ async function sheetFlush(manual) {
       "fail",
       "❌ Chưa gửi được kết quả (mạng yếu hoặc máy chủ chậm). ĐỪNG đóng trang — hệ thống đang tự thử lại (lần " +
         sheetAutoTries +
-        ").",
+        ")." + (sheetLastError ? " Chi tiết: " + sheetLastError : ""),
       true,
     );
   } else {
@@ -2835,7 +2887,7 @@ async function sheetFlush(manual) {
   sheetRetryTimer = setTimeout(() => sheetFlush(false), delay);
 }
 function sheetEnqueue(payload) {
-  const item = { payload: payload, savedAt: Date.now() };
+  const item = { payload: payload, savedAt: Date.now(), url: CLASS_SHEET_CONFIG.webAppUrl };
   sheetLastItem = item;
   sheetQueue.push(item);
   sheetPersist(); // lưu bản sao TRƯỚC khi gửi
