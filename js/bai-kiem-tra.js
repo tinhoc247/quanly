@@ -652,7 +652,10 @@ function renderAttemptHistoryList() {
 function enterQuizAfterLock() {
   studentInfo = pendingStudentInfo;
   document.getElementById("studentBadge").innerHTML =
-    `<span class="student-badge"><span class="student-badge-id">👤 ID: ${String(studentInfo.id || "—")}</span> · ${abbreviateLeadingWords(studentInfo.name, studentInfo.name.length > 22 ? studentInfo.name.trim().split(/\s+/).length - 1 : 0)} - lớp ${studentInfo.class}, ${studentInfo.school}</span>`;
+    `<div class="student-info">` +
+    `<p class="student-info-name">👤 ID: ${String(studentInfo.id || "—")} · ${abbreviateLeadingWords(studentInfo.name, studentInfo.name.length > 22 ? studentInfo.name.trim().split(/\s+/).length - 1 : 0)}</p>` +
+    `<p class="student-info-meta">Lớp ${studentInfo.class}, ${studentInfo.school}</p>` +
+    `</div>`;
   bumpAttemptCount(studentInfo);
   renderAttemptCount();
   document.getElementById("startScreen").style.display = "none";
