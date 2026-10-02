@@ -19,3 +19,13 @@ html[data-theme=dark] body.pre-start{background-position:var(--quiz-bg-pos)}
 .attempt-history-row .ah-time{color:var(--text)}
 .attempt-history-row .ah-at{color:var(--text-mute);font-size:13.5px}
 .app-footer{text-align:center;font-size:13px;color:var(--text-mute);margin-top:18px;padding-top:14px}
+
+/* Thông tin thí sinh trên header: 2 dòng giống phần ôn luyện, cỡ chữ thống nhất 14px như trước đây của phần kiểm tra */
+.student-info{display:flex;flex-direction:column;align-items:flex-end;gap:2px;max-width:min(70vw,460px,100%)}
+.student-info-name,.student-info-meta{font-size:14px;line-height:1.3;margin:0;white-space:normal;text-align:right}
+.student-info-name{font-weight:700;color:var(--blue-dark)}
+.student-info-meta{font-weight:400;color:var(--text-mute)}
+@media (max-width:600px){
+  .student-info{align-items:center;max-width:100%}
+  .student-info-name,.student-info-meta{text-align:center}
+}
