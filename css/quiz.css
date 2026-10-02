@@ -42,5 +42,3 @@ html[data-theme=dark] body.pre-start .header{background:rgba(20,23,31,.92);borde
   .header-icon img{width:40px!important;height:40px!important;}
   .theme-switch{width:42px!important;flex-basis:42px!important;height:23px!important;}
 }
-
-#fullscreenExitModal{background:#05060a;backdrop-filter:none;-webkit-backdrop-filter:none}
