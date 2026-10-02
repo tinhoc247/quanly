@@ -78,15 +78,14 @@ function selectedTopicsLabel() {
     " chủ đề khác"
   );
 }
-// Link nhận kết quả KHÔNG còn gán cứng: luôn lấy theo người đang đăng nhập (cột "link" trong
-// danh sách user). Nếu user chưa có link thì chặn tạo bộ đề, không rơi về link của ai khác.
-const DEFAULT_WEB_APP_URL = "";
+const DEFAULT_WEB_APP_URL =
+  "https://script.google.com/macros/s/AKfycbyzmYfeMuBxj9lNg40hHIIvMFHDUFIeAyV7w3uNRIO5hYETo_fB4tfmZHLVlyT6_AU76g/exec";
 const EMAIL_SHEET_ID = "1KA0PkikxJ_YFzobOl_QhzDc_Uiu8McTcv7BfwT7zwsU";
 const EMAIL_SHEET_TAB = "EmailScriptsSync";
 const USER_DIRECTORY_URL =
   "https://script.google.com/macros/s/AKfycbxiSMLdMGj4lvXY7_BGBI1MR4Fq7JvDD-2m2tLTSxE-_lxX2GzP_2JRSc2Gm5albOFeYA/exec";
 const FALLBACK_EMAIL_LIST = [
-  { id: "default", label: "Chưa có link nhận kết quả", url: DEFAULT_WEB_APP_URL },
+  { id: "default", label: "Mặc định (ngoại tuyến)", url: DEFAULT_WEB_APP_URL },
 ];
 const HOST_SHEET_ID = "1GoCzYfXAAnHu3eSS7ikza7EyqQooY-Jw2kYeBlOO6kg";
 const HOST_SHEET_TAB = "HostSync";
@@ -341,7 +340,6 @@ const QUIZ_LOADED_SUBJECTS = new Set();
 let EMAIL_LIST = FALLBACK_EMAIL_LIST.slice();
 let ACTIVE_EMAIL_ID = FALLBACK_EMAIL_LIST[0].id;
 let WEB_APP_URL = DEFAULT_WEB_APP_URL;
-let CURRENT_ADMIN_USER = null;
 let HOST_LIST = FALLBACK_HOST_LIST.slice();
 let ACTIVE_HOST_ID = FALLBACK_HOST_LIST[0].id;
 let HOST_SYNC_PROMISE = Promise.resolve();
@@ -622,10 +620,6 @@ function renderHostSelect() {
   renderHostStatus();
 }
 function syncActiveWebAppUrl() {
-  if (CURRENT_ADMIN_USER) {
-    WEB_APP_URL = String(CURRENT_ADMIN_USER.link || "").trim();
-    return;
-  }
   const found =
     EMAIL_LIST.find((e) => e.id === ACTIVE_EMAIL_ID) || EMAIL_LIST[0];
   if (found) {
@@ -703,8 +697,7 @@ async function loadEmailListFromApi() {
   }
   const stillExists = EMAIL_LIST.some((e) => e.id === ACTIVE_EMAIL_ID);
   if (!stillExists) ACTIVE_EMAIL_ID = EMAIL_LIST[0].id;
-  if (CURRENT_ADMIN_USER) applyLoggedInUserToEmailList(CURRENT_ADMIN_USER);
-  else syncActiveWebAppUrl();
+  syncActiveWebAppUrl();
   renderEmailSelect();
 }
 function normalizeClassListIds(rows) {
@@ -756,6 +749,7 @@ function loadState() {
       SCHOOL_LIST = Array.isArray(parsed.SCHOOL_LIST)
         ? parsed.SCHOOL_LIST
         : SEED_SCHOOL_LIST.slice();
+      ACTIVE_EMAIL_ID = parsed.ACTIVE_EMAIL_ID || ACTIVE_EMAIL_ID;
       ACTIVE_HOST_ID = parsed.ACTIVE_HOST_ID || ACTIVE_HOST_ID;
       ACTIVE_SUBJECT = SUBJECTS.some((s) => s.id === parsed.ACTIVE_SUBJECT)
         ? parsed.ACTIVE_SUBJECT
@@ -783,6 +777,7 @@ function saveState() {
         QUIZ_BY_SUBJECT: QUIZ_BY_SUBJECT,
         CLASS_LIST: CLASS_LIST,
         SCHOOL_LIST: SCHOOL_LIST,
+        ACTIVE_EMAIL_ID: ACTIVE_EMAIL_ID,
         ACTIVE_HOST_ID: ACTIVE_HOST_ID,
         ACTIVE_SUBJECT: ACTIVE_SUBJECT,
       }),
@@ -1741,15 +1736,14 @@ function buildUpdatedHtml(
     const escLabel = (s) =>
       String(s || "")
         .replace(/\\/g, "\\\\")
-        .replace(/"/g, '\\"')
-        .replace(/<\//g, "<\\/");
+        .replace(/"/g, '\\"');
     html = html.replace(
       /const\s+QUIZ_LEVEL_LABEL\s*=\s*"[^"]*";/,
-      () => 'const QUIZ_LEVEL_LABEL = "' + escLabel(levelLabel) + '";',
+      'const QUIZ_LEVEL_LABEL = "' + escLabel(levelLabel) + '";',
     );
     html = html.replace(
       /const\s+QUIZ_TOPIC_LABEL\s*=\s*"[^"]*";/,
-      () => 'const QUIZ_TOPIC_LABEL = "' + escLabel(topicLabel) + '";',
+      'const QUIZ_TOPIC_LABEL = "' + escLabel(topicLabel) + '";',
     );
   }
   if (examDurationMinutes != null) {
@@ -1768,16 +1762,7 @@ function buildUpdatedHtml(
   function replaceArrayLiteral(source, varName, innerText, notFoundMessage) {
     const re = new RegExp("const\\s+" + varName + "\\s*=\\s*\\[[\\s\\S]*?\\n?\\];");
     if (!re.test(source)) throw new Error(notFoundMessage);
-    // Dữ liệu (câu hỏi...) có thể chứa "$&", "$$", "$'"...: PHẢI thay bằng hàm, nếu truyền chuỗi
-    // thì JS sẽ diễn giải các mẫu đó và làm hỏng nội dung câu hỏi.
-    // Đồng thời "</" -> "<\/" để chuỗi "</script>" trong câu hỏi không kết thúc sớm thẻ <script>.
-    const safeInner = String(innerText)
-      .replace(/<\//g, "<\\/")
-      .replace(/<!--/g, "<\\!--");
-    return source.replace(
-      re,
-      () => "const " + varName + " = [" + safeInner + "];",
-    );
+    return source.replace(re, "const " + varName + " = [" + innerText + "];");
   }
   html = replaceArrayLiteral(
     html,
@@ -1804,21 +1789,12 @@ function buildUpdatedHtml(
       "Không tìm thấy vị trí danh sách học sinh trong khuôn mẫu.",
     );
   }
-  {
-    const resultUrl = String(WEB_APP_URL || "").trim();
-    if (!resultUrl)
-      throw new Error(
-        "Tài khoản đang đăng nhập chưa có link nhận kết quả (cột link trong danh sách user). Vui lòng liên hệ quản trị viên.",
-      );
-    let replacedUrl = false;
-    html = html.replace(/webAppUrl\s*:\s*(["'`]).*?\1/, () => {
-      replacedUrl = true;
-      return "webAppUrl: " + JSON.stringify(resultUrl);
-    });
-    if (!replacedUrl)
-      throw new Error(
-        "Không tìm thấy vị trí webAppUrl trong khuôn mẫu để gán link nhận kết quả.",
-      );
+  if (WEB_APP_URL) {
+    const safeUrl = WEB_APP_URL.replace(/"/g, '\\"');
+    html = html.replace(
+      /webAppUrl\s*:\s*(["'`]).*?\1/,
+      'webAppUrl: "' + safeUrl + '"',
+    );
     html = html.replace(
       /(const\s+CLASS_SHEET_CONFIG\s*=\s*\{\s*\n\s*enabled\s*:\s*)(true|false)/,
       "$1true",
@@ -2522,8 +2498,8 @@ async function fetchTemplateSource(mode) {
       `Không tìm thấy thẻ <script src="${files.js}"></script> trong ${files.html} — kiểm tra lại đường dẫn JS trong file này.`,
     );
   return html
-    .replace(linkTag, () => `<style>\n${css}\n</style>`)
-    .replace(scriptTag, () => `<script>\n${js}\n</script>`);
+    .replace(linkTag, `<style>\n${css}\n</style>`)
+    .replace(scriptTag, `<script>\n${js}\n</script>`);
 }
 function getCustomTopicLabel() {
   const el = document.getElementById("customTopicLabelInput");
@@ -2549,15 +2525,6 @@ async function buildStudentHtml(mode, quizForSet, setIndex, setTotal) {
   );
 }
 async function generateAndDeploySets(mode, baseFilename, labelPrefix) {
-  syncActiveWebAppUrl();
-  if (!CURRENT_ADMIN_USER || !String(WEB_APP_URL || "").trim()) {
-    setLog(
-      "downloadLog",
-      "err",
-      "❌ Không thể tạo bộ đề: tài khoản đang đăng nhập chưa có link nhận kết quả. Liên hệ quản trị viên để bổ sung link trong danh sách user.",
-    );
-    return;
-  }
   const activeEmail =
     EMAIL_LIST.find((e) => e.id === ACTIVE_EMAIL_ID) || EMAIL_LIST[0];
   const recipientLabel = activeEmail
@@ -4978,15 +4945,9 @@ function renderResultRecipientNotice() {
   if (!el) return;
   const active =
     EMAIL_LIST.find((e) => e.id === ACTIVE_EMAIL_ID) || EMAIL_LIST[0];
-  const label = active ? active.label || active.id : "Chưa có";
+  const label = active ? active.label || active.id : "Mặc định";
   el.style.display = "flex";
-  if (CURRENT_ADMIN_USER && !String(CURRENT_ADMIN_USER.link || "").trim())
-    el.innerHTML =
-      "⚠️ Tài khoản <b>" +
-      escapeHtml(CURRENT_ADMIN_USER.ten) +
-      "</b> chưa có link nhận kết quả — chưa thể tạo bộ đề. Liên hệ quản trị viên.";
-  else
-    el.innerHTML = "📧 Kết quả sẽ gửi đến <b>" + escapeHtml(label) + "</b>";
+  el.innerHTML = "📧 Kết quả sẽ gửi đến <b>" + escapeHtml(label) + "</b>";
 }
 function renderEmailSelect() {
   renderResultRecipientNotice();
@@ -5064,6 +5025,7 @@ const USER_LOGIN_MAX_ATTEMPTS = 3;
 let userLoginAttemptsLeft = USER_LOGIN_MAX_ATTEMPTS;
 let USER_DIRECTORY = [];
 let USER_DIRECTORY_LOADING = null;
+let CURRENT_ADMIN_USER = null;
 const SESSION_HEARTBEAT_INTERVAL_MS = 45e3;
 const APP_SESSION_ID =
   window.crypto && crypto.randomUUID
@@ -5179,19 +5141,25 @@ function logUserTaoBai(ten) {
   );
 }
 function applyLoggedInUserToEmailList(user) {
-  const link = String(user.link || "").trim();
+  if (!user.link) return;
   const syntheticId = "login:" + (user.email || user.ten);
   const label = user.ten + (user.team ? " - " + user.team : "");
-  const existing = EMAIL_LIST.find((e) => e.id === syntheticId);
-  if (existing) {
-    existing.url = link;
-    existing.label = label;
+  const byEmail = user.email && EMAIL_LIST.find((e) => e.id === user.email);
+  const existingSynthetic = EMAIL_LIST.find((e) => e.id === syntheticId);
+  if (byEmail) {
+    byEmail.url = user.link;
+    ACTIVE_EMAIL_ID = byEmail.id;
+  } else if (existingSynthetic) {
+    existingSynthetic.url = user.link;
+    existingSynthetic.label = label;
+    ACTIVE_EMAIL_ID = syntheticId;
   } else {
-    EMAIL_LIST.unshift({ id: syntheticId, label: label, url: link });
+    EMAIL_LIST.unshift({ id: syntheticId, label: label, url: user.link });
+    ACTIVE_EMAIL_ID = syntheticId;
   }
-  ACTIVE_EMAIL_ID = syntheticId;
-  syncActiveWebAppUrl();
-  renderEmailSelect();
+  if (typeof syncActiveWebAppUrl === "function") syncActiveWebAppUrl();
+  if (typeof saveState === "function") saveState();
+  if (typeof renderEmailSelect === "function") renderEmailSelect();
 }
 function claimUserSession(ten) {
   return fetch(
