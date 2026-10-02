@@ -8,3 +8,14 @@
 :root{--quiz-bg-pos:center bottom}
 body:not(.pre-start){background-position:var(--quiz-bg-pos)}
 html[data-theme=dark] body.pre-start{background-position:var(--quiz-bg-pos)}
+
+/* Lịch sử các lần làm */
+.attempt-history{text-align:left;border-top:1px solid var(--border);background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 20px;margin-top:14px;width:fit-content;max-width:100%}
+.attempt-history-title{font-size:16px;font-weight:800;color:var(--text);margin-bottom:8px}
+.attempt-history-list{display:flex;flex-direction:column;gap:6px}
+.attempt-history-row{font-size:15.5px;font-weight:600;color:var(--text);display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.attempt-history-row .ah-label{color:var(--text-mute);font-weight:700;min-width:56px}
+.attempt-history-row .ah-score{color:var(--blue-dark);font-weight:800;font-size:16px}
+.attempt-history-row .ah-time{color:var(--text)}
+.attempt-history-row .ah-at{color:var(--text-mute);font-size:13.5px}
+.app-footer{text-align:center;font-size:13px;color:var(--text-mute);margin-top:18px;padding-top:14px}
