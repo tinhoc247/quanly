@@ -79,7 +79,7 @@ const THEME_SUN_ICON =
 const CLASS_SHEET_CONFIG = {
   enabled: true,
   webAppUrl:
-    "https://script.google.com/macros/s/AKfycbwAqMGtP5d5qVOfbAX1_CBd6TZgFBEyo-9OEcF1eYY_tQBw8b-rAt7cS4SGhcIT3GArYw/exec",
+    "",
 };
 const DEMO_TOOLBAR_IMG =
   "data:image/svg+xml;utf8," +
@@ -810,7 +810,12 @@ function requestFullscreenSafe() {
   }
 }
 function showFullscreenExitModal() {
-  document.getElementById("fullscreenExitModal").style.display = "flex";
+  const m = document.getElementById("fullscreenExitModal");
+  // Nền ĐEN đặc, che kín toàn bộ bài làm (ép !important để không luật CSS nào đè được).
+  m.style.setProperty("background", "#05060a", "important");
+  m.style.setProperty("backdrop-filter", "none", "important");
+  m.style.setProperty("-webkit-backdrop-filter", "none", "important");
+  m.style.display = "flex";
 }
 function hideFullscreenExitModal() {
   document.getElementById("fullscreenExitModal").style.display = "none";
@@ -831,12 +836,29 @@ function disableFullscreenLock() {
 ].forEach((evt) => {
   document.addEventListener(evt, () => {
     if (!fullscreenRequired) return;
-    if (isFullscreenActive()) hideFullscreenExitModal();
+    if (isFullscreenActive() && !isExamWindowAway()) hideFullscreenExitModal();
     else showFullscreenExitModal();
   });
 });
+// Học sinh thu nhỏ cửa sổ / chuyển tab / chuyển sang ứng dụng khác:
+// phủ nền đen kín màn hình và hiện thông báo "Chú ý" (cùng modal với thoát toàn màn hình).
+function isExamWindowAway() {
+  return document.hidden || !document.hasFocus();
+}
+function checkExamWindowAway() {
+  if (!fullscreenRequired) return;
+  if (isExamWindowAway() || !isFullscreenActive()) showFullscreenExitModal();
+}
+window.addEventListener("blur", checkExamWindowAway);
+document.addEventListener("visibilitychange", checkExamWindowAway);
 document.getElementById("fullscreenExitRetryBtn").onclick = () => {
-  requestFullscreenSafe();
+  if (isFullscreenActive()) {
+    // Vẫn đang toàn màn hình (chỉ mất focus/chuyển tab) -> quay lại bài ngay.
+    window.focus();
+    hideFullscreenExitModal();
+    return;
+  }
+  requestFullscreenSafe(); // vào lại toàn màn hình -> sự kiện fullscreenchange sẽ ẩn modal
 };
 document.getElementById("resultModalCloseBtn").onclick = () => {
   document.getElementById("resultModal").style.display = "none";
@@ -2790,176 +2812,6 @@ function formatStartTime(ts) {
   const yy = String(d.getFullYear()).slice(-2);
   return `${hh}:${mm} ${dd}/${MM}/${yy}`;
 }
-/* ===== Gửi kết quả về Google Sheet: hàng đợi + lưu localStorage + tự thử lại =====
-   - Mỗi lần nộp có 1 mã "sid" riêng, GIỮ NGUYÊN khi gửi lại -> server (Get_result_v4.gs)
-     nhận ra và không ghi trùng.
-   - Kết quả được lưu vào localStorage TRƯỚC khi gửi, chỉ xóa khi server xác nhận. */
-const SHEET_PENDING_KEY = "ic3_pending_results_v1";
-const SHEET_TIMEOUT_MS = 30000;
-const SHEET_MAX_AUTO_TRIES = 8;
-let sheetQueue = [];
-let sheetFlushing = false;
-let sheetRetryTimer = null;
-let sheetAutoTries = 0;
-let sheetStatusHideTimer = null;
-
-function sheetLoadPending() {
-  try {
-    const list = JSON.parse(localStorage.getItem(SHEET_PENDING_KEY) || "[]");
-    return Array.isArray(list) ? list : [];
-  } catch (e) {
-    return [];
-  }
-}
-function sheetPersist() {
-  try {
-    if (sheetQueue.length)
-      localStorage.setItem(SHEET_PENDING_KEY, JSON.stringify(sheetQueue));
-    else localStorage.removeItem(SHEET_PENDING_KEY);
-  } catch (e) {
-    /* localStorage đầy/bị chặn: vẫn còn hàng đợi trong bộ nhớ trang */
-  }
-}
-function sheetNewSid() {
-  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
-}
-function sheetBuildBody(payload) {
-  const body = new URLSearchParams();
-  Object.keys(payload).forEach((k) => body.append(k, String(payload[k])));
-  return body;
-}
-function sheetSetStatus(kind, text, showRetryBtn) {
-  let el = document.getElementById("sheetSyncStatus");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "sheetSyncStatus";
-    el.setAttribute("role", "status");
-    el.style.cssText =
-      "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:99999;" +
-      "max-width:92vw;padding:10px 16px;border-radius:12px;font:600 14px/1.4 system-ui,sans-serif;" +
-      "box-shadow:0 4px 16px rgba(0,0,0,.18);display:flex;gap:10px;align-items:center;";
-    document.body.appendChild(el);
-  }
-  const colors = {
-    sending: ["#eef4ff", "#1e3a8a"],
-    ok: ["#e6f6ec", "#14532d"],
-    warn: ["#fff4d6", "#7a4b00"],
-    fail: ["#fde8e8", "#8a1c1c"],
-  };
-  const c = colors[kind] || colors.sending;
-  el.style.background = c[0];
-  el.style.color = c[1];
-  el.textContent = text;
-  if (showRetryBtn) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Gửi lại";
-    btn.style.cssText =
-      "border:0;border-radius:8px;padding:6px 10px;font:inherit;cursor:pointer;background:#8a1c1c;color:#fff;";
-    btn.onclick = () => sheetFlush(true);
-    el.appendChild(btn);
-  }
-  el.style.display = "flex";
-  clearTimeout(sheetStatusHideTimer);
-  if (kind === "ok") {
-    sheetStatusHideTimer = setTimeout(() => {
-      el.style.display = "none";
-    }, 8000);
-  }
-}
-/* Trả về: "ok" (server trả status "ok" -> đã ghi) | "retry" (mọi trường hợp khác:
-   lỗi mạng, hết giờ, server busy/error, không đọc được phản hồi -> coi như CHƯA ghi,
-   gửi lại cùng sid; server nhận ra sid cũ nên không ghi trùng). */
-async function sheetPost(item) {
-  const url = CLASS_SHEET_CONFIG.webAppUrl;
-  const body = sheetBuildBody(item.payload);
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), SHEET_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-      },
-      body: body,
-      redirect: "follow",
-      signal: ctrl.signal,
-    });
-    const data = await res.json();
-    return data && data.status === "ok" ? "ok" : "retry";
-  } catch (err) {
-    return "retry";
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function sheetFlush(manual) {
-  if (sheetFlushing) return;
-  if (!CLASS_SHEET_CONFIG.enabled || !CLASS_SHEET_CONFIG.webAppUrl) return;
-  if (!sheetQueue.length) return;
-  sheetFlushing = true;
-  clearTimeout(sheetRetryTimer);
-  if (manual) sheetAutoTries = 0;
-  sheetSetStatus("sending", "⏳ Đang gửi…");
-  let failed = false;
-  while (sheetQueue.length) {
-    const r = await sheetPost(sheetQueue[0]);
-    if (r !== "ok") {
-      failed = true; // chỉ xóa khỏi hàng đợi khi server trả ok
-      break;
-    }
-    sheetQueue.shift();
-    sheetPersist();
-  }
-  sheetFlushing = false;
-  if (!failed) {
-    sheetAutoTries = 0;
-    sheetSetStatus("ok", "✅ Đã ghi kết quả");
-    return;
-  }
-  sheetAutoTries++;
-  if (sheetAutoTries >= SHEET_MAX_AUTO_TRIES) {
-    sheetSetStatus(
-      "fail",
-      "❌ Chưa ghi được kết quả. Kết quả vẫn được lưu trên máy.",
-      true,
-    );
-    return;
-  }
-  const delay =
-    Math.min(60000, 3000 * Math.pow(2, sheetAutoTries - 1)) +
-    Math.floor(Math.random() * 1500);
-  sheetSetStatus("warn", "⚠️ Chưa gửi được, đang thử lại…");
-  sheetRetryTimer = setTimeout(() => sheetFlush(false), delay);
-}
-function sheetEnqueue(payload) {
-  sheetQueue.push({ payload: payload, savedAt: Date.now() });
-  sheetPersist(); // lưu bản sao TRƯỚC khi gửi
-  sheetFlush(true);
-}
-(function initSheetSync() {
-  sheetQueue = sheetLoadPending();
-  if (sheetQueue.length) setTimeout(() => sheetFlush(true), 1500); // kết quả còn sót từ lần trước
-  window.addEventListener("online", () => sheetFlush(true));
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && sheetQueue.length)
-      sheetFlush(false);
-  });
-  // Lần thoát trang cuối: bắn beacon (cùng sid nên server không ghi trùng);
-  // vẫn giữ trong hàng đợi để lần mở sau xác nhận lại.
-  window.addEventListener("pagehide", () => {
-    if (!sheetQueue.length || !navigator.sendBeacon) return;
-    sheetQueue.forEach((item) => {
-      try {
-        navigator.sendBeacon(
-          CLASS_SHEET_CONFIG.webAppUrl,
-          sheetBuildBody(item.payload),
-        );
-      } catch (e) {}
-    });
-  });
-})();
 function sendResultToClassSheet(
   points,
   correctCount,
@@ -2969,7 +2821,6 @@ function sendResultToClassSheet(
 ) {
   if (!CLASS_SHEET_CONFIG.enabled || !CLASS_SHEET_CONFIG.webAppUrl) return;
   const payload = {
-    sid: sheetNewSid(),
     id: studentInfo.id || "",
     submittedAt: new Date().toLocaleString("vi-VN"),
     name: studentInfo.name,
@@ -2978,14 +2829,40 @@ function sendResultToClassSheet(
     quizTitle: getResultQuizTitle(),
     mode: QUIZ_MODE === "kiemtra" ? "Kiểm tra" : "Ôn tập",
     score: `${points}/1000`,
-    classification:
+    xepLoai:
       QUIZ_MODE === "kiemtra" && classification ? classification : "",
     passed: passed,
     correctCount: correctCount,
     totalCount: ACTIVE_QUIZ.length,
     startTime: quizStartTime ? formatStartTime(quizStartTime) : "",
   };
-  sheetEnqueue(payload);
+  try {
+    let iframe = document.getElementById("sheetSubmitFrame");
+    if (!iframe) {
+      iframe = document.createElement("iframe");
+      iframe.name = "sheetSubmitFrame";
+      iframe.id = "sheetSubmitFrame";
+      iframe.style.display = "none";
+      document.body.appendChild(iframe);
+    }
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = CLASS_SHEET_CONFIG.webAppUrl;
+    form.target = "sheetSubmitFrame";
+    form.style.display = "none";
+    Object.keys(payload).forEach((key) => {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = key;
+      input.value = String(payload[key]);
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+    form.remove();
+  } catch (err) {
+    console.error("Gửi kết quả vào Google Sheet của lớp thất bại:", err);
+  }
 }
 const CONFETTI_PRESETS = {
   pass: {
@@ -3168,7 +3045,7 @@ function showResultScreen() {
     resultTier.faceMsg.match(/^[^\s]+/)?.[0] || resultTier.emoji;
   const encouragementText = resultTier.faceMsg.replace(/^[^\s]+\s*/, "");
   const mount = DOM.mainCard;
-  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${resultTier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${scoreDisplay}</div>\n      ${classificationLine}\n      <div class="result-status ${resultTier.statusClass}">${resultTier.emoji} ${resultTier.statusText}</div>\n      ${perfectBadge}\n      <p class="result-detail-line">Bạn trả lời đúng <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button class="btn btn-primary" onclick="restartQuiz()">Làm lại</button>\n      </div>\n    </div>\n  `;
+  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${resultTier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${scoreDisplay}</div>\n      ${classificationLine}\n      <div class="result-status ${resultTier.statusClass}">${resultTier.emoji} ${resultTier.statusText}</div>\n      ${perfectBadge}\n      <p class="result-detail-line">Bạn trả lời đúng <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button class="btn btn-primary" onclick="restartQuiz()">Làm lại</button>\n      </div>\n      <p class="result-submit-note">Bài đã được gửi</p>\n    </div>\n  `;
   renderSidebar();
 }
 function restartQuiz() {
