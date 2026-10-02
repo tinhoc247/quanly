@@ -2817,14 +2817,10 @@ function formatStartTime(ts) {
      nhận ra và không ghi trùng.
    - Kết quả được lưu vào localStorage TRƯỚC khi gửi, chỉ xóa khi server xác nhận. */
 const SHEET_PENDING_KEY = "ic3_pending_results_v1";
-const SHEET_TIMEOUT_MS = 30000;
-// Gửi lại KHÔNG giới hạn số lần cho tới khi server trả ok (khoảng cách tăng dần, tối đa 45 giây).
-const SHEET_MAX_RETRY_DELAY_MS = 45000;
-// Sau bấy nhiêu lần thất bại liên tiếp thì hiện cảnh báo mạnh "đừng đóng trang".
-const SHEET_WARN_AFTER_TRIES = 2;
+const SHEET_TIMEOUT_MS = 45000; // chờ lâu hơn vì không còn tự gửi lại
+// KHÔNG tự động gửi lại: gửi 1 lần khi nộp bài; nếu lỗi thì học sinh bấm "Gửi lại ngay".
 let sheetQueue = [];
 let sheetFlushing = false;
-let sheetRetryTimer = null;
 let sheetLastError = "";
 let sheetAutoTries = 0;
 let sheetStatusHideTimer = null;
@@ -2960,7 +2956,6 @@ function sheetRenderBadge(kind, text, showRetryBtn) {
   el.appendChild(row);
 }
 function sheetSetStatus(kind, text, showRetryBtn) {
-  if (!sheetLastItem) return; // chỉ báo trạng thái cho bài vừa nộp; bài cũ còn sót gửi ngầm
   sheetRenderBadge(kind, text, showRetryBtn);
   let el = document.getElementById("sheetSyncStatus");
   if (!el) {
@@ -3032,15 +3027,6 @@ async function sheetPost(item) {
     clearTimeout(timer);
   }
 }
-const SHEET_FAILED_KEY = "ic3_failed_results_v1";
-const SHEET_MAX_SERVER_ERRORS = 5;
-function sheetMoveToFailed(item) {
-  try {
-    const list = JSON.parse(localStorage.getItem(SHEET_FAILED_KEY) || "[]");
-    list.push(item);
-    localStorage.setItem(SHEET_FAILED_KEY, JSON.stringify(list));
-  } catch (e) {}
-}
 async function sheetFlush(manual) {
   if (sheetFlushing) return;
   if (!CLASS_SHEET_CONFIG.enabled) return;
@@ -3051,13 +3037,11 @@ async function sheetFlush(manual) {
   });
   if (!sheetQueue.some((it) => it.url)) return;
   sheetFlushing = true;
-  clearTimeout(sheetRetryTimer);
-  if (manual) sheetAutoTries = 0;
   sheetSetStatus("sending", "⏳ Đang gửi kết quả… Vui lòng KHÔNG đóng trang.");
   let failed = false;
-  let gaveUp = false;
   const badUrls = {};
-  // Duyệt từng bài: 1 bài lỗi KHÔNG được chặn các bài phía sau.
+  // Chỉ gửi MỘT lượt (lúc nộp bài, hoặc khi học sinh bấm "Gửi lại").
+  // Bài lỗi vẫn nằm trong hàng đợi để học sinh bấm gửi lại; KHÔNG tự thử lại.
   for (const item of sheetQueue.slice()) {
     if (!item.url || badUrls[item.url]) {
       failed = true;
@@ -3069,53 +3053,24 @@ async function sheetFlush(manual) {
       sheetPersist();
       continue;
     }
-    if (r === "error") {
-      item.errCount = (item.errCount || 0) + 1;
-      if (item.errCount >= SHEET_MAX_SERVER_ERRORS) {
-        // Server từ chối nhiều lần -> cất sang kho riêng, ngừng thử lại để khỏi kẹt mãi.
-        sheetQueue = sheetQueue.filter((x) => x !== item);
-        sheetMoveToFailed(item);
-        gaveUp = true;
-        sheetPersist();
-        continue;
-      }
-    } else {
-      badUrls[item.url] = true; // mạng/link hỏng: khỏi thử tiếp các bài cùng link trong lượt này
-    }
+    if (r !== "error") badUrls[item.url] = true; // mạng/link hỏng: khỏi thử tiếp các bài cùng link
     failed = true;
-    sheetPersist();
   }
   sheetFlushing = false;
   if (!failed) {
     sheetAutoTries = 0;
-    if (gaveUp)
-      sheetSetStatus(
-        "fail",
-        "❌ Máy chủ từ chối bài này" + (sheetLastError ? " (" + sheetLastError + ")" : "") +
-          ". Bấm 💾 Lưu bản dự phòng và báo giáo viên.",
-      );
-    else sheetSetStatus("ok", "✅ Đã ghi nhận kết quả — giáo viên đã nhận được bài của bạn.");
+    sheetSetStatus("ok", "✅ Đã ghi nhận kết quả — giáo viên đã nhận được bài của bạn.");
     return;
   }
-  // Còn bài chưa gửi được: tiếp tục tự thử lại.
   sheetAutoTries++;
-  const delay =
-    Math.min(
-      SHEET_MAX_RETRY_DELAY_MS,
-      3000 * Math.pow(2, Math.min(sheetAutoTries, 8) - 1),
-    ) + Math.floor(Math.random() * 1500);
-  if (sheetAutoTries >= SHEET_WARN_AFTER_TRIES) {
-    sheetSetStatus(
-      "fail",
-      "❌ Chưa gửi được kết quả (mạng yếu hoặc máy chủ chậm). ĐỪNG đóng trang — hệ thống đang tự thử lại (lần " +
-        sheetAutoTries +
-        ")." + (sheetLastError ? " Chi tiết: " + sheetLastError : ""),
-      true,
-    );
-  } else {
-    sheetSetStatus("warn", "⚠️ Chưa gửi được, đang thử lại…", true);
-  }
-  sheetRetryTimer = setTimeout(() => sheetFlush(false), delay);
+  sheetSetStatus(
+    "fail",
+    "❌ Chưa gửi được kết quả (mạng yếu hoặc máy chủ chậm)" +
+      (sheetAutoTries > 1 ? " — đã thử " + sheetAutoTries + " lần" : "") +
+      ". Hãy bấm \"Gửi lại ngay\" để gửi lại. ĐỪNG đóng trang cho tới khi thấy dấu ✅." +
+      (sheetLastError ? " Chi tiết: " + sheetLastError : ""),
+    true,
+  );
 }
 function sheetEnqueue(payload) {
   const item = { payload: payload, savedAt: Date.now(), url: CLASS_SHEET_CONFIG.webAppUrl };
@@ -3133,20 +3088,27 @@ window.addEventListener("beforeunload", (e) => {
 });
 (function initSheetSync() {
   sheetQueue = sheetLoadPending();
-  if (sheetQueue.length) setTimeout(() => sheetFlush(true), 1500); // kết quả còn sót từ lần trước
-  window.addEventListener("online", () => sheetFlush(true));
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && sheetQueue.length)
-      sheetFlush(false);
-  });
-  // Lần thoát trang cuối: bắn beacon (cùng sid nên server không ghi trùng);
-  // vẫn giữ trong hàng đợi để lần mở sau xác nhận lại.
+  // KHÔNG tự động gửi: nếu còn bài chưa gửi từ lần trước thì chỉ báo + nút "Gửi lại".
+  if (sheetQueue.length) {
+    const n = sheetQueue.length;
+    setTimeout(
+      () =>
+        sheetSetStatus(
+          "fail",
+          "⚠️ Có " + n + " bài làm trước đó chưa được gửi lên giáo viên. Bấm \"Gửi lại\" để gửi.",
+          true,
+        ),
+      1500,
+    );
+  }
+  // Lần thoát trang cuối: bắn beacon 1 lần (cùng sid nên server không ghi trùng);
+  // vẫn giữ trong hàng đợi để lần mở sau còn nhắc gửi lại.
   window.addEventListener("pagehide", () => {
     if (!sheetQueue.length || !navigator.sendBeacon) return;
     sheetQueue.forEach((item) => {
       try {
         navigator.sendBeacon(
-          CLASS_SHEET_CONFIG.webAppUrl,
+          item.url || CLASS_SHEET_CONFIG.webAppUrl,
           sheetBuildBody(item.payload),
         );
       } catch (e) {}
