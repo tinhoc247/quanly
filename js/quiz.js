@@ -673,7 +673,7 @@ function renderAttemptHistoryList() {
     .map(
       (h, idx) =>
         `<div class="attempt-history-row">` +
-        `<span class="ah-label">Lần ${idx + 1}:</span>` +
+        `<span class="ah-label">Ôn tập lần ${idx + 1}:</span>` +
         `<span class="ah-score">${h.score}/1000</span>` +
         `<span class="ah-time">⏱ ${formatDuration(h.timeTakenSeconds)}</span>` +
         `<span class="ah-at">${h.at || ""}</span>` +
