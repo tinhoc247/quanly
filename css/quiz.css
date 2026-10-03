@@ -50,3 +50,27 @@ html[data-theme=dark] body.pre-start .header{background:rgba(20,23,31,.92);borde
 :root{--quiz-bg-pos:center bottom}
 body:not(.pre-start){background-position:var(--quiz-bg-pos)}
 html[data-theme=dark] body.pre-start{background-position:var(--quiz-bg-pos)}
+/* ===== Thanh trạng thái gửi điểm (cảnh báo / gửi lại / tải ảnh điểm) ===== */
+#sendStatusBar.ssb-ok{border-color:#1f9d55;background:#e7f8ee;color:#166534}
+#sendStatusBar.ssb-retrying{border-color:#f59e0b;background:#fff8e6;color:#5a4a1f}
+#sendStatusBar.ssb-failed{border-color:#e0433c;background:#fdebea;color:#9f1c19}
+#sendStatusBar .ssb-msg{font-weight:600}
+#sendStatusBar.ssb-sending .ssb-msg::before,#sendStatusBar.ssb-retrying .ssb-msg::before{content:"";display:inline-block;width:14px;height:14px;margin-right:8px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-2px;animation:ssbspin .8s linear infinite}
+@keyframes ssbspin{to{transform:rotate(360deg)}}
+#sendStatusBar .ssb-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+#sendStatusBar .ssb-btn{flex:1 1 150px;border:0;border-radius:10px;padding:11px 14px;font-size:14.5px;font-weight:800;cursor:pointer;background:#2f6fed;color:#fff}
+#sendStatusBar .ssb-btn.ssb-img{background:#fff;color:#1f4fc4;border:1.5px solid #2f6fed}
+#sendStatusBar .ssb-btn:active{transform:scale(.98)}
+/* ===== Thanh trạng thái nộp bài: dòng "Còn N bài trước chưa nộp" riêng, không che trạng thái bài đang nộp ===== */
+#sendStatusBar.ssb-none{border-color:#e0433c;background:#fdebea;color:#9f1c19}
+#sendStatusBar .ssb-old{margin-top:10px;padding:10px 12px;border-radius:10px;background:#fdebea;color:#9f1c19;border:1px solid #f5c6c3}
+#sendStatusBar.ssb-failed .ssb-old{background:#fff;border-color:#f5c6c3}
+#sendStatusBar .ssb-old-msg{font-weight:600}
+#sendStatusBar .ssb-old .ssb-actions{margin-top:8px}
+#sendStatusBar .ssb-btn:disabled{opacity:.55;cursor:not-allowed}
+body.ssb-open{padding-bottom:calc(var(--ssb-h,0px) + 28px)!important}
+/* ===== Khung nộp bài gọn: dạng viên thuốc, canh giữa, không che ảnh nền ===== */
+#sendStatusBar.ssb-ok,#sendStatusBar.ssb-sending,#sendStatusBar.ssb-retrying{width:fit-content;max-width:min(360px,calc(100vw - 32px));padding:9px 20px;border-radius:999px;text-align:center;font-size:14px;line-height:1.4;box-shadow:0 6px 20px rgba(16,24,40,.22)}
+#sendStatusBar.ssb-ok .ssb-msg,#sendStatusBar.ssb-sending .ssb-msg,#sendStatusBar.ssb-retrying .ssb-msg{font-weight:700;white-space:nowrap}
+#sendStatusBar.ssb-ok .ssb-old,#sendStatusBar.ssb-sending .ssb-old{border-radius:12px;white-space:normal;text-align:left}
+#sendStatusBar.ssb-ok:has(.ssb-old:not([style*="none"])),#sendStatusBar.ssb-sending:has(.ssb-old:not([style*="none"])){border-radius:14px;width:min(580px,calc(100vw - 24px));max-width:none}
