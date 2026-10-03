@@ -2757,8 +2757,13 @@ function rsShow(state, msg, item) {
   resultSendMsg = msg;
   if (item !== undefined) resultSendMain = item;
   if (state === "ok" && resultSendMain) resultSubmittedId = resultSendMain.id;
-  rsRender();
   rsUpdateSubmitNote();
+  /* Dòng "Bài đã nộp" trên màn hình kết quả đã hiện -> tắt luôn thanh thông báo, khỏi hiện trùng */
+  if (state === "ok") {
+    const note = document.getElementById("resultSubmitNote");
+    if (note && note.style.display !== "none") resultSendState = "none";
+  }
+  rsRender();
 }
 function rsFailedMessage(item) {
   const p = item.payload || {};
