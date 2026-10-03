@@ -2812,6 +2812,434 @@ function formatStartTime(ts) {
   const yy = String(d.getFullYear()).slice(-2);
   return `${hh}:${mm} ${dd}/${MM}/${yy}`;
 }
+/* ===== GỬI ĐIỂM LÊN SHEET =====
+   - Gửi bằng fetch để BIẾT thành công / thất bại (trước đây gửi form ẩn, không biết kết quả).
+   - KHÔNG tự gửi lại: chỉ gửi 1 lần, chờ tối đa attemptTimeoutMs.
+       + Đang gửi  -> "Bài đang nộp... vui lòng chờ"
+       + Thành công -> "Bài đã nộp"
+       + Thất bại / quá thời gian -> "Bài chưa nộp. Bấm nút nộp lại" (học sinh tự bấm Nộp lại / Tải ảnh điểm).
+   - Bài chưa nộp được lưu trong localStorage; mở bài khác (cùng tên miền) vẫn thấy dòng "Còn N bài chưa nộp"
+     riêng, KHÔNG che trạng thái của bài đang nộp.
+   - Bài nộp khi đang gửi bài khác sẽ xếp hàng và tự gửi (lần đầu) ngay khi tới lượt.
+   - Nhiều tab: danh sách bài chưa nộp được đồng bộ; mỗi bài chỉ 1 tab được gửi tại một thời điểm. */
+const RESULT_SEND = {
+  attemptTimeoutMs: 30000,
+  firstJitterMs: 2000,
+  sendSubmissionId: true,
+  storageKey: "quiz_pending_results_v1",
+  claimKeyPrefix: "quiz_sending_claim_v1:",
+  maxAgeMs: 24 * 3600 * 1000,
+};
+const RS_TAB = "T" + Math.random().toString(36).slice(2, 10);
+let resultSendList = [];
+let resultSendMain = null;
+let resultSendState = "none";
+let resultSendMsg = "";
+let resultSendBusy = false;
+let resultSendHideTimer = null;
+const resultSendQueue = [];
+function rsStoreRead() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(RESULT_SEND.storageKey) || "[]");
+    const now = Date.now();
+    return Array.isArray(arr)
+      ? arr.filter((x) => x && x.id && x.payload && x.url && now - x.ts < RESULT_SEND.maxAgeMs)
+      : [];
+  } catch (e) {
+    return null;
+  }
+}
+function rsStoreWrite(list) {
+  try {
+    if (list.length) localStorage.setItem(RESULT_SEND.storageKey, JSON.stringify(list));
+    else localStorage.removeItem(RESULT_SEND.storageKey);
+  } catch (e) {}
+}
+function rsMerge() {
+  const out = [];
+  const seen = {};
+  resultSendList.concat(rsStoreRead() || []).forEach((x) => {
+    if (x && !seen[x.id]) {
+      seen[x.id] = 1;
+      out.push(x);
+    }
+  });
+  return out;
+}
+function rsCommit(list) {
+  list.sort((a, b) => a.ts - b.ts);
+  resultSendList = list;
+  rsStoreWrite(list);
+}
+function rsAdd(item) {
+  const cur = rsMerge();
+  if (!cur.some((x) => x.id === item.id)) cur.push(item);
+  rsCommit(cur);
+}
+function rsRemove(id) {
+  rsCommit(rsMerge().filter((x) => x.id !== id));
+}
+function rsPersist() {
+  rsCommit(rsMerge());
+}
+function rsSyncFromStore() {
+  const fresh = rsStoreRead();
+  if (fresh === null) return;
+  resultSendList = fresh.map((x) => resultSendList.find((m) => m.id === x.id) || x);
+}
+function rsClaimRead(id) {
+  try {
+    const c = JSON.parse(localStorage.getItem(RESULT_SEND.claimKeyPrefix + id) || "null");
+    if (c && c.tab !== RS_TAB && Date.now() - c.t < RESULT_SEND.attemptTimeoutMs + 8000) return c;
+  } catch (e) {}
+  return null;
+}
+function rsClaimSet(id) {
+  try { localStorage.setItem(RESULT_SEND.claimKeyPrefix + id, JSON.stringify({ tab: RS_TAB, t: Date.now() })); } catch (e) {}
+}
+function rsClaimClear(id) {
+  try { localStorage.removeItem(RESULT_SEND.claimKeyPrefix + id); } catch (e) {}
+}
+function rsEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+function rsSleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+function rsNewId() {
+  return "S" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+}
+function rsOthers() {
+  return resultSendList.filter((x) => (!resultSendMain || x.id !== resultSendMain.id) && !rsClaimRead(x.id));
+}
+function rsEnsureBar() {
+  let bar = document.getElementById("sendStatusBar");
+  if (bar) return bar;
+  bar = document.createElement("div");
+  bar.id = "sendStatusBar";
+  bar.setAttribute("role", "status");
+  bar.innerHTML =
+    '<div class="ssb-main"><div class="ssb-msg"></div><div class="ssb-actions">' +
+    '<button type="button" class="ssb-btn ssb-retry">🔄 Nộp lại</button>' +
+    '<button type="button" class="ssb-btn ssb-img">🖼️ Tải ảnh điểm</button></div></div>' +
+    '<div class="ssb-old"><div class="ssb-old-msg"></div><div class="ssb-actions">' +
+    '<button type="button" class="ssb-btn ssb-old-retry">🔄 Nộp lại</button>' +
+    '<button type="button" class="ssb-btn ssb-img ssb-old-img">🖼️ Tải ảnh điểm</button></div></div>';
+  document.body.appendChild(bar);
+  bar.querySelector(".ssb-retry").onclick = () => rsManualResend(resultSendMain);
+  bar.querySelector(".ssb-img").onclick = () => rsDownloadImage(resultSendMain);
+  bar.querySelector(".ssb-old-retry").onclick = () => rsManualResend(rsOthers()[0]);
+  bar.querySelector(".ssb-old-img").onclick = () => rsDownloadImage(rsOthers()[0]);
+  return bar;
+}
+function rsRender() {
+  if (!document.body) return;
+  const st = resultSendState;
+  const others = rsOthers();
+  const bar = rsEnsureBar();
+  clearTimeout(resultSendHideTimer);
+  if (st === "none" && !others.length) {
+    bar.classList.remove("show");
+    document.body.classList.remove("ssb-open");
+    return;
+  }
+  bar.className = "ssb-" + st + " show";
+  const mainEl = bar.querySelector(".ssb-main");
+  mainEl.style.display = st === "none" ? "none" : "";
+  bar.querySelector(".ssb-msg").innerHTML = resultSendMsg;
+  bar.querySelector(".ssb-retry").style.display = st === "failed" ? "" : "none";
+  bar.querySelector(".ssb-img").style.display = st === "failed" ? "" : "none";
+  const oldEl = bar.querySelector(".ssb-old");
+  if (others.length) {
+    const o = others[0];
+    const p = o.payload || {};
+    oldEl.style.display = "";
+    oldEl.style.marginTop = st === "none" ? "0" : "";
+    bar.querySelector(".ssb-old-msg").innerHTML =
+      "⚠️ <b>Còn " + others.length + " bài " + (st === "failed" ? "khác" : "trước") +
+      " chưa nộp:</b> " + rsEsc(p.name) + " – " + rsEsc(p.score) + (o.lastReason ? " (" + rsEsc(o.lastReason) + ")" : "") + ".";
+    const dis = st === "sending";
+    bar.querySelector(".ssb-old-retry").disabled = dis;
+    bar.querySelector(".ssb-old-img").disabled = false;
+  } else {
+    oldEl.style.display = "none";
+  }
+  document.body.classList.add("ssb-open");
+  document.documentElement.style.setProperty("--ssb-h", bar.offsetHeight + "px");
+  if (st === "ok")
+    resultSendHideTimer = setTimeout(() => {
+      resultSendState = "none";
+      rsRender();
+    }, 6000);
+}
+let resultSubmittedId = null;
+function rsUpdateSubmitNote() {
+  const el = document.getElementById("resultSubmitNote");
+  if (!el) return;
+  const done = !!(resultSendMain && resultSubmittedId && resultSubmittedId === resultSendMain.id);
+  el.textContent = done ? "Bài đã nộp" : "";
+  el.style.display = done ? "" : "none";
+}
+function rsShow(state, msg, item) {
+  resultSendState = state;
+  resultSendMsg = msg;
+  if (item !== undefined) resultSendMain = item;
+  if (state === "ok" && resultSendMain) resultSubmittedId = resultSendMain.id;
+  rsRender();
+  rsUpdateSubmitNote();
+}
+function rsFailedMessage(item) {
+  const p = item.payload || {};
+  const why = item.lastReason ? " Lý do: " + rsEsc(item.lastReason) + "." : "";
+  return (
+    "⚠️ <b>Bài chưa nộp. Bấm nút nộp lại</b><br>" +
+    "<b>" + rsEsc(p.name) + "</b> – " + rsEsc(p.score) + "." + why + "<br>" +
+    "Đừng đóng trang. Nếu nộp lại vẫn không được, bấm <b>Tải ảnh điểm</b> và gửi ảnh cho giáo viên."
+  );
+}
+async function rsJudge(res) {
+  if (!res.ok) return { ok: false, reason: "Máy chủ báo lỗi HTTP " + res.status };
+  let text = "";
+  try {
+    text = (await res.text()).slice(0, 3000);
+  } catch (e) {}
+  try {
+    const j = JSON.parse(text);
+    if (j && (j.status === "error" || j.result === "error" || j.ok === false || j.success === false))
+      return { ok: false, reason: String(j.message || j.error || "Máy chủ báo lỗi") };
+    return { ok: true };
+  } catch (e) {}
+  if (/completed but did not return anything/i.test(text)) return { ok: true };
+  if (/too many times|limit exceeded|exception|typeerror|referenceerror|script function not found|unable to open the file|lỗi/i.test(text))
+    return { ok: false, reason: "Hệ thống bảng điểm đang quá tải" };
+  return { ok: true };
+}
+async function rsPostOnce(item) {
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = setTimeout(() => {
+    try { ctl && ctl.abort(); } catch (e) {}
+  }, RESULT_SEND.attemptTimeoutMs);
+  try {
+    const body = new URLSearchParams();
+    Object.keys(item.payload).forEach((k) => body.append(k, String(item.payload[k])));
+    const res = await fetch(item.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: body.toString(),
+      signal: ctl ? ctl.signal : undefined,
+      redirect: "follow",
+      credentials: "omit",
+      cache: "no-store",
+    });
+    return await rsJudge(res);
+  } catch (err) {
+    const reason =
+      err && err.name === "AbortError" ? "Quá thời gian chờ"
+      : navigator.onLine === false ? "Mất kết nối mạng"
+      : "Không kết nối được máy chủ";
+    return { ok: false, reason: reason };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function rsMarkDone(item) {
+  rsRemove(item.id);
+  rsShow("ok", "✅ <b>Bài đã nộp</b>", item);
+}
+async function rsDeliver(item, isManual) {
+  if (resultSendBusy) {
+    if (!isManual && resultSendQueue.indexOf(item.id) === -1) resultSendQueue.push(item.id);
+    return false;
+  }
+  resultSendBusy = true;
+  let claimed = false;
+  try {
+    if (rsClaimRead(item.id)) {
+      /* bài này đang được tab/cửa sổ khác nộp: chờ, không gửi trùng */
+      rsShow("sending", "Bài đang nộp ở cửa sổ khác... vui lòng chờ", item);
+      const t0 = Date.now();
+      while (Date.now() - t0 < RESULT_SEND.attemptTimeoutMs + 8000) {
+        await rsSleep(1000);
+        rsSyncFromStore();
+        if (!resultSendList.some((x) => x.id === item.id)) {
+          rsShow("ok", "✅ <b>Bài đã nộp</b>", item);
+          return true;
+        }
+        if (!rsClaimRead(item.id)) break;
+      }
+      rsShow("failed", rsFailedMessage(item), item);
+      return false;
+    }
+    rsClaimSet(item.id);
+    claimed = true;
+    rsShow("sending", "Bài đang nộp... vui lòng chờ", item);
+    if (!isManual) await rsSleep(Math.random() * RESULT_SEND.firstJitterMs);
+    const r = await rsPostOnce(item);
+    if (r.ok) {
+      item.lastReason = "";
+      rsMarkDone(item);
+      return true;
+    }
+    item.lastReason = r.reason;
+    rsPersist();
+    rsShow("failed", rsFailedMessage(item), item);
+    return false;
+  } finally {
+    if (claimed) rsClaimClear(item.id);
+    resultSendBusy = false;
+    const nextId = resultSendQueue.shift();
+    const nxt = nextId && resultSendList.find((x) => x.id === nextId);
+    if (nxt) setTimeout(() => rsDeliver(nxt, false), 0);
+  }
+}
+function rsManualResend(item) {
+  if (!item || resultSendBusy) return;
+  rsDeliver(item, true);
+}
+function rsBuildImage(item) {
+  const p = item.payload || {};
+  const W = 1000, H = 700, S = 2;
+  const c = document.createElement("canvas");
+  c.width = W * S;
+  c.height = H * S;
+  const x = c.getContext("2d");
+  if (!x) return null;
+  x.scale(S, S);
+  const F = '"Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+  const rr = (px, py, w, h, r) => {
+    x.beginPath();
+    x.moveTo(px + r, py);
+    x.arcTo(px + w, py, px + w, py + h, r);
+    x.arcTo(px + w, py + h, px, py + h, r);
+    x.arcTo(px, py + h, px, py, r);
+    x.arcTo(px, py, px + w, py, r);
+    x.closePath();
+  };
+  const fit = (t, maxW) => {
+    t = String(t == null ? "" : t);
+    if (x.measureText(t).width <= maxW) return t;
+    while (t.length > 1 && x.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+    return t + "…";
+  };
+  const text = (t, px, py, font, color, align, maxW) => {
+    x.font = font;
+    x.fillStyle = color;
+    x.textAlign = align || "left";
+    x.textBaseline = "alphabetic";
+    x.fillText(maxW ? fit(t, maxW) : String(t), px, py);
+  };
+  x.fillStyle = "#eef2fb";
+  x.fillRect(0, 0, W, H);
+  rr(30, 30, W - 60, H - 60, 22);
+  x.fillStyle = "#ffffff";
+  x.fill();
+  x.save();
+  rr(30, 30, W - 60, H - 60, 22);
+  x.clip();
+  x.fillStyle = "#2f6fed";
+  x.fillRect(30, 30, W - 60, 120);
+  x.restore();
+  text("PHIẾU ĐIỂM BÀI LÀM", 70, 92, "800 34px " + F, "#ffffff", "left");
+  text(p.quizTitle || "", 70, 128, "600 20px " + F, "#dbe7ff", "left", W - 140);
+  const rows = [
+    ["Học sinh", p.name],
+    ["Lớp", p.class],
+    ["Trường", p.school],
+    ["Mã học sinh", p.id],
+    ["Hình thức", p.mode],
+  ];
+  rows.forEach((r, i) => {
+    const y = 205 + i * 62;
+    text(r[0], 70, y, "600 18px " + F, "#6b7688", "left");
+    text(r[1] || "—", 70, y + 30, "800 25px " + F, "#1e2433", "left", 480);
+  });
+  rr(620, 185, 310, 270, 18);
+  x.fillStyle = "#eaf1ff";
+  x.fill();
+  x.lineWidth = 2;
+  x.strokeStyle = "#bcd2ff";
+  x.stroke();
+  const m = String(p.score || "").match(/^\s*(\d+)\s*\/\s*(\d+)/);
+  text("ĐIỂM", 775, 230, "700 18px " + F, "#1f4fc4", "center");
+  text(m ? m[1] : String(p.score || ""), 775, 330, "800 92px " + F, "#1f4fc4", "center", 270);
+  text(m ? "/ " + m[2] : "", 775, 368, "700 26px " + F, "#4b6fb8", "center");
+  if (p.xepLoai) text("Xếp loại: " + p.xepLoai, 775, 406, "800 22px " + F, "#1e2433", "center", 280);
+  text("Đúng " + p.correctCount + "/" + p.totalCount + " câu", 775, 438, "600 19px " + F, "#4a5568", "center");
+  x.setLineDash([8, 6]);
+  x.strokeStyle = "#cbd5e1";
+  x.lineWidth = 1.5;
+  x.beginPath();
+  x.moveTo(70, 530);
+  x.lineTo(W - 70, 530);
+  x.stroke();
+  x.setLineDash([]);
+  text("Bắt đầu: " + (p.startTime || "—") + "     Nộp lúc: " + (p.submittedAt || "—"), 70, 565, "600 18px " + F, "#4a5568", "left", W - 140);
+  text("Mã gửi: " + (p.submissionId || item.id || "—"), 70, 593, "600 16px " + F, "#8a94a6", "left", W - 140);
+  rr(70, 610, W - 140, 44, 10);
+  x.fillStyle = "#fdebea";
+  x.fill();
+  text("Ảnh dùng làm minh chứng khi điểm chưa ghi lên bảng điểm – hãy gửi ảnh này cho giáo viên.", W / 2, 638, "700 16px " + F, "#9f1c19", "center", W - 170);
+  return c;
+}
+function rsDownloadImage(item) {
+  if (!item) return;
+  let c = null;
+  try {
+    c = rsBuildImage(item);
+  } catch (e) {
+    console.error("Tạo ảnh điểm thất bại:", e);
+  }
+  if (!c) {
+    alert("Thiết bị không tạo được ảnh điểm. Hãy chụp màn hình phần kết quả và gửi cho giáo viên.");
+    return;
+  }
+  const slug = (s) =>
+    String(s || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d").replace(/Đ/g, "D")
+      .replace(/[^A-Za-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+  const fname = "Diem_" + (slug(item.payload.name) || "hocsinh") + "_" + (slug(item.payload.id) || "ID") + ".png";
+  const save = (href, revoke) => {
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    if (revoke) setTimeout(() => URL.revokeObjectURL(href), 5000);
+  };
+  if (c.toBlob) c.toBlob((b) => (b ? save(URL.createObjectURL(b), true) : save(c.toDataURL("image/png"), false)), "image/png");
+  else save(c.toDataURL("image/png"), false);
+}
+window.addEventListener("beforeunload", function (e) {
+  if (resultSendBusy || resultSendList.length) {
+    e.preventDefault();
+    e.returnValue = "";
+    return "";
+  }
+});
+window.addEventListener("storage", function (e) {
+  if (e.key && e.key !== RESULT_SEND.storageKey && e.key.indexOf(RESULT_SEND.claimKeyPrefix) !== 0) return;
+  if (!document.body) return;
+  rsSyncFromStore();
+  if (!resultSendBusy && resultSendState === "failed" && resultSendMain && !resultSendList.some((x) => x.id === resultSendMain.id)) {
+    rsShow("ok", "✅ <b>Bài đã nộp</b>", resultSendMain);
+    return;
+  }
+  rsRender();
+});
+(function rsRestore() {
+  resultSendList = rsStoreRead() || [];
+  if (!resultSendList.length) return;
+  const show = () => {
+    const first = resultSendList.find((x) => !rsClaimRead(x.id));
+    if (first) rsShow("failed", rsFailedMessage(first), first);
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", show);
+  else show();
+})();
 function sendResultToClassSheet(
   points,
   correctCount,
@@ -2836,33 +3264,11 @@ function sendResultToClassSheet(
     totalCount: ACTIVE_QUIZ.length,
     startTime: quizStartTime ? formatStartTime(quizStartTime) : "",
   };
-  try {
-    let iframe = document.getElementById("sheetSubmitFrame");
-    if (!iframe) {
-      iframe = document.createElement("iframe");
-      iframe.name = "sheetSubmitFrame";
-      iframe.id = "sheetSubmitFrame";
-      iframe.style.display = "none";
-      document.body.appendChild(iframe);
-    }
-    const form = document.createElement("form");
-    form.method = "POST";
-    form.action = CLASS_SHEET_CONFIG.webAppUrl;
-    form.target = "sheetSubmitFrame";
-    form.style.display = "none";
-    Object.keys(payload).forEach((key) => {
-      const input = document.createElement("input");
-      input.type = "hidden";
-      input.name = key;
-      input.value = String(payload[key]);
-      form.appendChild(input);
-    });
-    document.body.appendChild(form);
-    form.submit();
-    form.remove();
-  } catch (err) {
-    console.error("Gửi kết quả vào Google Sheet của lớp thất bại:", err);
-  }
+  const subId = rsNewId();
+  if (RESULT_SEND.sendSubmissionId) payload.submissionId = subId;
+  const item = { id: subId, url: CLASS_SHEET_CONFIG.webAppUrl, payload: payload, ts: Date.now() };
+  rsAdd(item);
+  rsDeliver(item, false); /* đang bận bài khác -> tự xếp hàng, gửi ngay khi tới lượt */
 }
 const CONFETTI_PRESETS = {
   pass: {
@@ -3045,7 +3451,8 @@ function showResultScreen() {
     resultTier.faceMsg.match(/^[^\s]+/)?.[0] || resultTier.emoji;
   const encouragementText = resultTier.faceMsg.replace(/^[^\s]+\s*/, "");
   const mount = DOM.mainCard;
-  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${resultTier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${scoreDisplay}</div>\n      ${classificationLine}\n      <div class="result-status ${resultTier.statusClass}">${resultTier.emoji} ${resultTier.statusText}</div>\n      ${perfectBadge}\n      <p class="result-detail-line">Bạn trả lời đúng <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button class="btn btn-primary" onclick="restartQuiz()">Làm lại</button>\n      </div>\n      <p class="result-submit-note">Bài đã được gửi</p>\n    </div>\n  `;
+  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${resultTier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${scoreDisplay}</div>\n      ${classificationLine}\n      <div class="result-status ${resultTier.statusClass}">${resultTier.emoji} ${resultTier.statusText}</div>\n      ${perfectBadge}\n      <p class="result-detail-line">Bạn trả lời đúng <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button class="btn btn-primary" onclick="restartQuiz()">Làm lại</button>\n      </div>\n      <p class="result-submit-note" id="resultSubmitNote" style="display:none;"></p>\n    </div>\n  `;
+  rsUpdateSubmitNote();
   renderSidebar();
 }
 function restartQuiz() {
