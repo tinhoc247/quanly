@@ -1312,6 +1312,9 @@ function renderAll() {
   renderSidebar();
   const mount = DOM.mainCard;
   mount.innerHTML = "";
+  const __rk = current + "|" + quizFinished;
+  mount.classList.toggle("no-enter", window.__lastRenderKey === __rk);
+  window.__lastRenderKey = __rk;
   const isReviewPage = !quizFinished && current === ACTIVE_QUIZ.length;
   if (isReviewPage) {
     renderReviewPage(mount);
@@ -2706,6 +2709,7 @@ function rsEnsureBar() {
 }
 function rsRender() {
   if (!document.body) return;
+  rsUpdateSubmitNote();
   const st = resultSendState;
   const others = rsOthers();
   const bar = rsEnsureBar();
@@ -2745,12 +2749,73 @@ function rsRender() {
     }, 6000);
 }
 let resultSubmittedId = null;
+let rsCurrentItem = null;
 function rsUpdateSubmitNote() {
   const el = document.getElementById("resultSubmitNote");
+  const box = document.getElementById("resultSendActions");
   if (!el) return;
-  const done = !!(resultSendMain && resultSubmittedId && resultSubmittedId === resultSendMain.id);
-  el.textContent = done ? "Bài đã nộp" : "";
-  el.style.display = done ? "" : "none";
+  const item = rsCurrentItem;
+  if (!item) {
+    el.style.display = "none";
+    if (box) box.style.display = "none";
+    return;
+  }
+  const done = resultSubmittedId === item.id;
+  const sending = !done && ((resultSendBusy && resultSendMain && resultSendMain.id === item.id) || resultSendQueue.indexOf(item.id) !== -1 || !!rsClaimRead(item.id));
+  let html;
+  if (done) html = "✅ <b>Bài đã nộp</b>";
+  else if (sending) html = "⏳ <b>Bài đang nộp… vui lòng chờ</b>";
+  else
+    html =
+      "⚠️ <b>Bài chưa nộp.</b> Bấm <b>Nộp lại</b>." +
+      (item.lastReason ? " (Lý do: " + rsEsc(item.lastReason) + ")" : "") +
+      "<br>Nộp lại vẫn không được: bấm <b>Tải phiếu điểm</b> và gửi ảnh cho giáo viên. Đừng đóng trang.";
+  el.innerHTML = html;
+  el.style.display = "";
+  el.style.color = done ? "var(--green-text)" : sending ? "var(--text-mute)" : "var(--red-text)";
+  el.style.fontSize = "15px";
+  if (box) {
+    box.style.display = "flex";
+    const rb = document.getElementById("resultResendBtn");
+    if (rb) {
+      rb.style.display = done ? "none" : "";
+      rb.disabled = sending || resultSendBusy;
+    }
+  }
+}
+function rsResultResend() {
+  const it = rsCurrentItem;
+  if (!it || resultSubmittedId === it.id) return;
+  if (!resultSendList.some((x) => x.id === it.id)) rsAdd(it);
+  rsManualResend(it);
+}
+function rsBuildLocalItem() {
+  if (!lastResult || typeof studentInfo === "undefined" || !studentInfo) return null;
+  const r = lastResult;
+  const subId = rsNewId();
+  const payload = {
+    id: studentInfo.id || "",
+    submittedAt: new Date().toLocaleString("vi-VN"),
+    name: studentInfo.name,
+    class: studentInfo.class,
+    school: studentInfo.school,
+    quizTitle: getResultQuizTitle(),
+    mode: "Kiểm tra",
+    score: r.points + "/1000",
+    xepLoai: (r.tier && r.tier.xepLoaiLabel) || "",
+    passed: r.passed,
+    correctCount: r.correctCount,
+    totalCount: ACTIVE_QUIZ.length,
+    startTime: quizStartTime ? formatStartTime(quizStartTime) : "",
+    submissionId: subId,
+  };
+  return { id: subId, url: "", payload: payload, ts: Date.now(), localOnly: true };
+}
+function rsResultDownload() {
+  /* Luôn tải được, kể cả khi chưa cấu hình/nộp bảng điểm lớp */
+  const it = rsCurrentItem || rsBuildLocalItem();
+  if (it) rsDownloadImage(it);
+  else alert("Chưa có kết quả để tải. Hãy nộp bài trước.");
 }
 function rsShow(state, msg, item) {
   resultSendState = state;
@@ -2771,24 +2836,33 @@ function rsFailedMessage(item) {
   return (
     "⚠️ <b>Bài chưa nộp. Bấm nút nộp lại</b><br>" +
     "<b>" + rsEsc(p.name) + "</b> – " + rsEsc(p.score) + "." + why + "<br>" +
-    "Đừng đóng trang. Nếu nộp lại vẫn không được, bấm <b>Tải ảnh điểm</b> và gửi ảnh cho giáo viên."
+    "Đừng đóng trang. Nếu nộp lại vẫn không được, bấm <b>Tải phiếu điểm</b> và gửi ảnh cho giáo viên."
   );
 }
 async function rsJudge(res) {
-  if (!res.ok) return { ok: false, reason: "Máy chủ báo lỗi HTTP " + res.status };
+  if (!res.ok) return { ok: false, reason: "Máy chủ báo lỗi HTTP " + res.status, maybeWritten: true };
+  if (res.url && /accounts\.google\.com|ServiceLogin/i.test(res.url))
+    return { ok: false, reason: "Bảng điểm chưa mở quyền truy cập công khai" };
   let text = "";
   try {
     text = (await res.text()).slice(0, 3000);
   } catch (e) {}
   try {
     const j = JSON.parse(text);
+    if (j && j.status === "busy")
+      return { ok: false, reason: "Hệ thống đang bận" };
     if (j && (j.status === "error" || j.result === "error" || j.ok === false || j.success === false))
-      return { ok: false, reason: String(j.message || j.error || "Máy chủ báo lỗi") };
+      return { ok: false, reason: String(j.message || j.error || "Máy chủ báo lỗi"), permanent: j.status === "error" };
+    /* Server trả JSON "tưởng là OK" nhưng thực tế KHÔNG ghi (không thấy học sinh, bỏ qua...) */
+    const st = String((j && (j.status || j.result)) || "");
+    if (j && (j.written === false || j.saved === false || j.updated === false || j.found === false ||
+        /^(not_?found|no_?match|skipped|ignored|rejected|invalid|fail(ed)?)$/i.test(st)))
+      return { ok: false, reason: String(j.message || j.error || "Máy chủ không ghi điểm (không tìm thấy học sinh trong bảng)"), maybeWritten: false };
     return { ok: true };
   } catch (e) {}
   if (/completed but did not return anything/i.test(text)) return { ok: true };
-  if (/too many times|limit exceeded|exception|typeerror|referenceerror|script function not found|unable to open the file|lỗi/i.test(text))
-    return { ok: false, reason: "Hệ thống bảng điểm đang quá tải" };
+  if (/too many times|limit exceeded|exception|typeerror|referenceerror|script function not found|unable to open the file|lỗi|sign in|accounts\.google|page not found|not found|exceeded maximum execution time|server error occurred|timed out|authorization required|access denied|you need access|error 4\d\d|error 5\d\d|lock timeout|could not obtain lock|không tìm thấy|chưa ghi|thất bại/i.test(text))
+    return { ok: false, reason: "Hệ thống bảng điểm đang quá tải hoặc báo lỗi", maybeWritten: true };
   return { ok: true };
 }
 async function rsPostOnce(item) {
@@ -2823,6 +2897,40 @@ function rsMarkDone(item) {
   rsRemove(item.id);
   rsShow("ok", "✅ <b>Bài đã nộp</b>", item);
 }
+async function rsCheckSent(item) {
+  /* Hỏi server: mã nộp này đã ghi vào Sheet chưa? true = đã ghi, false = chưa, null = không biết */
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = setTimeout(() => {
+    try { ctl && ctl.abort(); } catch (e) {}
+  }, RESULT_SEND.checkTimeoutMs || 15000);
+  try {
+    const u = item.url + (item.url.indexOf("?") === -1 ? "?" : "&") + "check=" + encodeURIComponent(item.id) + "&_=" + Date.now();
+    const res = await fetch(u, { method: "GET", signal: ctl ? ctl.signal : undefined, redirect: "follow", credentials: "omit", cache: "no-store" });
+    if (!res.ok) return null;
+    const j = JSON.parse(await res.text());
+    if (j && j.status === "ok" && j.found === true) return true;
+    if (j && j.status === "ok" && j.found === false) return false;
+    return null;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function rsVerifyWritten(item, r) {
+  /* Server trả "OK" chưa chắc điểm đã nằm trong Sheet -> hỏi lại server (tối đa 3 lần, cách nhau ~1,5s).
+     - Server xác nhận đã ghi  -> nộp thành công.
+     - Server nói CHƯA ghi     -> coi là chưa nộp (tự gửi lại / hiện nút nộp lại), KHÔNG báo "đã nộp".
+     - Server không hỗ trợ kiểm tra (không biết) -> tin vào phản hồi của lần gửi. */
+  let c = null;
+  for (let i = 0; i < 3; i++) {
+    c = await rsCheckSent(item);
+    if (c !== false) break;
+    await rsSleep(1500);
+  }
+  if (c === false) return { ok: false, reason: "Máy chủ báo nhận bài nhưng chưa ghi điểm vào bảng", maybeWritten: false };
+  return r;
+}
 async function rsDeliver(item, isManual) {
   if (resultSendBusy) {
     if (!isManual && resultSendQueue.indexOf(item.id) === -1) resultSendQueue.push(item.id);
@@ -2851,7 +2959,8 @@ async function rsDeliver(item, isManual) {
     claimed = true;
     rsShow("sending", "Bài đang nộp... vui lòng chờ", item);
     if (!isManual) await rsSleep(Math.random() * RESULT_SEND.firstJitterMs);
-    const r = await rsPostOnce(item);
+    let r = await rsPostOnce(item);
+    if (r.ok) r = await rsVerifyWritten(item, r);
     if (r.ok) {
       item.lastReason = "";
       rsMarkDone(item);
@@ -2955,7 +3064,7 @@ function rsBuildImage(item) {
   rr(70, 610, W - 140, 44, 10);
   x.fillStyle = "#fdebea";
   x.fill();
-  text("Ảnh dùng làm minh chứng khi điểm chưa ghi lên bảng điểm – hãy gửi ảnh này cho giáo viên.", W / 2, 638, "700 16px " + F, "#9f1c19", "center", W - 170);
+  text("Phiếu điểm bài làm – hãy lưu lại và gửi cho giáo viên khi cần.", W / 2, 638, "700 16px " + F, "#9f1c19", "center", W - 170);
   return c;
 }
 function rsDownloadImage(item) {
@@ -3043,6 +3152,7 @@ function sendResultToClassSheet(
   const subId = rsNewId();
   if (RESULT_SEND.sendSubmissionId) payload.submissionId = subId;
   const item = { id: subId, url: CLASS_SHEET_CONFIG.webAppUrl, payload: payload, ts: Date.now() };
+  rsCurrentItem = item;
   rsAdd(item);
   rsDeliver(item, false); /* đang bận bài khác -> tự xếp hàng, gửi ngay khi tới lượt */
 }
@@ -3208,7 +3318,7 @@ function finishQuiz(force) {
     renderAttemptCount();
   }
   showResultScreen();
-  showResultPopup();
+  // (đã bỏ popup "Đã nộp bài": hiện thẳng màn hình kết quả)
   if (passed) fireConfetti(resultTier.tier);
   sendResultToClassSheet(
     points,
@@ -3268,7 +3378,7 @@ function showResultScreen() {
     resultTier.faceMsg.match(/^[^\s]+/)?.[0] || resultTier.emoji;
   const encouragementText = resultTier.faceMsg.replace(/^[^\s]+\s*/, "");
   const mount = DOM.mainCard;
-  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${resultTier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${points}<span class="result-score-max">/1000</span></div>\n      ${classificationLine}\n      <div class="result-status ${resultTier.statusClass}">${resultTier.emoji} ${resultTier.statusText}</div>\n      ${perfectBadge}\n      <p class="result-detail-line">Trả lời đúng hoàn toàn <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button class="btn btn-primary" onclick="restartQuiz()">Làm lại bài thi</button>\n      </div>\n      <p class="result-submit-note" id="resultSubmitNote" style="display:none;"></p>\n    </div>\n  `;
+  mount.innerHTML = `\n    <div class="result-card">\n      <div class="result-encouragement ${resultTier.faceClass}"><span class="result-encouragement-emoji">${encouragementEmoji}</span><span>${textToSafeHtml(encouragementText)}</span></div>\n      <div class="q-label" style="justify-content:center;display:block;text-align:center;">KẾT QUẢ BÀI LÀM</div>\n      <div class="result-score">${points}<span class="result-score-max">/1000</span></div>\n      ${classificationLine}\n      <div class="result-status ${resultTier.statusClass}">${resultTier.emoji} ${resultTier.statusText}</div>\n      ${perfectBadge}\n      <p class="result-detail-line">Trả lời đúng hoàn toàn <b>${correctCount}/${ACTIVE_QUIZ.length}</b> câu hỏi.</p>\n      <p class="result-time-line">⏱ Tổng thời gian làm bài: <b>${formatDuration(timeTakenSeconds)}</b></p>\n      <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap;">\n        <button type="button" class="btn btn-primary" id="resultDownloadBtn" onclick="rsResultDownload()">📄 Tải phiếu điểm</button><button class="btn btn-primary" onclick="restartQuiz()">Làm lại bài thi</button>\n      </div>\n      <div id="resultSendActions" style="display:none;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap;"><button type="button" class="btn btn-ghost" id="resultResendBtn" onclick="rsResultResend()">🔄 Nộp lại</button></div>\n      <p class="result-submit-note" id="resultSubmitNote" style="display:none;"></p>\n    </div>\n  `;
   rsUpdateSubmitNote();
   renderSidebar();
 }
@@ -3341,5 +3451,107 @@ function restartQuiz() {
   });
   document.addEventListener("visibilitychange", function () {
     setBlur(document.hidden);
+  });
+})();
+
+/* ===== Chặn chụp màn hình Windows+Shift+S / PrintScreen =====
+   Trình duyệt không thể huỷ hẳn phím tắt của Windows (do hệ điều hành xử lý),
+   nên khi phát hiện tổ hợp Win+Shift (trước khi bấm S) hoặc PrintScreen,
+   toàn bộ nội dung bài làm bị che kín bằng lớp đen và xoá clipboard,
+   vì vậy ảnh chụp chỉ thấy màn hình che. */
+(function () {
+  var cover = document.createElement("div");
+  cover.id = "snipCover";
+  cover.setAttribute("role", "alert");
+  cover.style.cssText =
+    "position:fixed;inset:0;z-index:2147483647;display:none;background:#05060a;" +
+    "color:#e7eaf2;align-items:center;justify-content:center;text-align:center;" +
+    "padding:24px;font:800 18px/1.5 system-ui,sans-serif;";
+  cover.textContent = "🚫 Chụp màn hình không được phép. Dùng nút Tải phiếu điểm để lưu kết quả.";
+  document.body.appendChild(cover);
+
+  var metaDown = false,
+    shiftDown = false,
+    hideTimer = null;
+
+  function examActive() {
+    /* đang làm bài HOẶC đã nộp (màn hình kết quả / xem lại đáp án) */
+    return (
+      (typeof fullscreenRequired !== "undefined" && fullscreenRequired) ||
+      (typeof quizFinished !== "undefined" && quizFinished)
+    );
+  }
+  function clearClipboard() {
+    /* Không đụng tới clipboard: tránh trình duyệt hỏi quyền "xem nội dung clipboard". Lớp che đen là đủ. */
+  }
+  function showCover(holdMs) {
+    cover.style.display = "flex";
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(function () {
+      if (!(metaDown && shiftDown)) cover.style.display = "none";
+    }, holdMs);
+  }
+  function warn() {
+    if (typeof showSecurityWarning === "function")
+      showSecurityWarning("Phím chụp màn hình (Windows+Shift+S) đã bị khoá. Hãy dùng nút Tải phiếu điểm ở màn hình kết quả.");
+  }
+
+  window.addEventListener(
+    "keydown",
+    function (e) {
+      if (!examActive()) return;
+      var k = (e.key || "").toLowerCase();
+      if (k === "meta" || k === "os") metaDown = true;
+      if (k === "shift") shiftDown = true;
+      var win = e.metaKey || metaDown;
+      var shift = e.shiftKey || shiftDown;
+      if ((win && shift) || (win && k === "s" && shift)) {
+        if (k === "s") {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        showCover(2500);
+        clearClipboard();
+        if (k === "s") warn();
+      } else if (k === "printscreen" || e.keyCode === 44) {
+        e.preventDefault();
+        showCover(2500);
+        clearClipboard();
+        warn();
+      }
+    },
+    true,
+  );
+  window.addEventListener(
+    "keyup",
+    function (e) {
+      var k = (e.key || "").toLowerCase();
+      if (k === "meta" || k === "os") metaDown = false;
+      if (k === "shift") shiftDown = false;
+      if (k === "printscreen" || e.keyCode === 44) {
+        clearClipboard();
+        if (examActive()) showCover(2500);
+      } else if (cover.style.display === "flex" && !(metaDown && shiftDown)) {
+        showCover(1500);
+      }
+    },
+    true,
+  );
+  var holdUntilFocus = false;
+  window.addEventListener("blur", function () {
+    if (examActive() && (metaDown || shiftDown) && cover.style.display === "flex") {
+      holdUntilFocus = true;
+      clearTimeout(hideTimer);
+    }
+    metaDown = false;
+    shiftDown = false;
+  });
+  window.addEventListener("focus", function () {
+    if (!holdUntilFocus) return;
+    holdUntilFocus = false;
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(function () {
+      cover.style.display = "none";
+    }, 400);
   });
 })();
