@@ -2437,6 +2437,8 @@ async function deployToNetlify(htmlContent, fileName) {
   return json.url;
 }
 function showNetlifyLink(label, url) {
+  if (typeof window.recordLinkHistory === "function")
+    window.recordLinkHistory(label, url);
   const box = document.getElementById("netlifyLinkBox");
   const list = document.getElementById("netlifyLinkList");
   box.style.display = "block";
@@ -5125,58 +5127,48 @@ function applyDevToolsLock(user) {
     }
   });
 }
-function fetchUserDirectory() {
-  if (!USER_DIRECTORY_LOADING)
-    USER_DIRECTORY_LOADING = fetch(
-      USER_DIRECTORY_URL + "?action=list&_=" + Date.now(),
-    )
-      .then((res) => {
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        return res.json();
-      })
-      .then((json) => {
-        if (!json || json.ok === false || !Array.isArray(json.rows))
-          throw new Error(
-            (json && json.error) || "Dữ liệu trả về không hợp lệ",
-          );
-        USER_DIRECTORY = json.rows
-          .map((r) => ({
-            ten: String(r.ten || "").trim(),
-            team: String(r.team || "").trim(),
-            email: String(r.email || "").trim(),
-            link: String(r.link || "").trim(),
-          }))
-          .filter((r) => r.ten);
-        return USER_DIRECTORY;
-      })
-      .catch((err) => {
-        USER_DIRECTORY_LOADING = null;
-        throw err;
-      });
-  return USER_DIRECTORY_LOADING;
+// Danh sách user / phiên đăng nhập lưu trên Firestore, gọi qua Apps Script (action "users").
+// "op" là tên thao tác con: login, heartbeat, logout, log-taobai (không cần adminKey) và
+// list, upsert, import, delete, clear-session (cần adminKey).
+async function usersApi(op, payload, opts) {
+  let res;
+  try {
+    res = await fetch(FUNCTIONS_ORIGIN, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "users", op, ...payload }),
+      keepalive: !!(opts && opts.keepalive),
+    });
+  } catch (err) {
+    throw new Error("Không gọi được máy chủ (kiểm tra mạng): " + err.message);
+  }
+  let json;
+  try {
+    json = await res.json();
+  } catch (err) {
+    throw new Error("Máy chủ trả về phản hồi không hợp lệ (HTTP " + res.status + ").");
+  }
+  if (!json || json.status !== "ok")
+    throw new Error((json && json.message) || "Lỗi HTTP " + res.status);
+  return json;
 }
-function logUserAccess(ten) {
-  fetch(
-    USER_DIRECTORY_URL +
-      "?action=checkin&ten=" +
-      encodeURIComponent(ten) +
-      "&_=" +
-      Date.now(),
-  ).catch((err) =>
-    console.error("Không ghi được thời gian truy cập lên sheet:", err),
-  );
+// Quản trị (trang "Danh sách user") gọi kèm adminKey
+function usersAdminApi(op, payload) {
+  return usersApi(op, { adminKey: ADMIN_KEY, ...payload });
 }
 function logUserTaoBai(ten) {
   if (!ten) return;
-  fetch(
-    USER_DIRECTORY_URL +
-      "?action=log-taobai&ten=" +
-      encodeURIComponent(ten) +
-      "&_=" +
-      Date.now(),
-  ).catch((err) =>
-    console.error("Không ghi được số lần tạo bài lên sheet:", err),
-  );
+  usersApi("log-taobai", { ten: ten, sessionId: APP_SESSION_ID })
+    .then((json) => {
+      if (json.kicked) return handleSessionKicked();
+      if (CURRENT_ADMIN_USER && typeof json.soLanTaoBai === "number") {
+        CURRENT_ADMIN_USER.soLanTaoBai = json.soLanTaoBai;
+        window.dispatchEvent(new CustomEvent("ic3:user-updated"));
+      }
+    })
+    .catch((err) =>
+      console.error("Không ghi được số lần tạo bài lên máy chủ:", err),
+    );
 }
 function applyLoggedInUserToEmailList(user) {
   const link = String(user.link || "").trim();
@@ -5193,40 +5185,12 @@ function applyLoggedInUserToEmailList(user) {
   syncActiveWebAppUrl();
   renderEmailSelect();
 }
-function claimUserSession(ten) {
-  return fetch(
-    USER_DIRECTORY_URL +
-      "?action=claim-session&ten=" +
-      encodeURIComponent(ten) +
-      "&sessionId=" +
-      encodeURIComponent(APP_SESSION_ID) +
-      "&_=" +
-      Date.now(),
-  )
-    .then((res) => {
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      return res.json();
-    })
-    .then((json) => {
-      if (!json || json.ok === false)
-        throw new Error((json && json.error) || "Phản hồi không hợp lệ");
-      return json;
-    });
-}
+
 function startSessionHeartbeat(user) {
   if (isTeamGVUser(user)) return;
   stopSessionHeartbeat();
   sessionHeartbeatTimer = setInterval(() => {
-    fetch(
-      USER_DIRECTORY_URL +
-        "?action=heartbeat&ten=" +
-        encodeURIComponent(user.ten) +
-        "&sessionId=" +
-        encodeURIComponent(APP_SESSION_ID) +
-        "&_=" +
-        Date.now(),
-    )
-      .then((res) => res.json())
+    usersApi("heartbeat", { ten: user.ten, sessionId: APP_SESSION_ID })
       .then((json) => {
         if (json && json.kicked) handleSessionKicked();
       })
@@ -5243,12 +5207,9 @@ function stopSessionHeartbeat() {
 function releaseSessionOnUnload() {
   if (!CURRENT_ADMIN_USER || isTeamGVUser(CURRENT_ADMIN_USER)) return;
   try {
-    fetch(
-      USER_DIRECTORY_URL +
-        "?action=logout&ten=" +
-        encodeURIComponent(CURRENT_ADMIN_USER.ten) +
-        "&sessionId=" +
-        encodeURIComponent(APP_SESSION_ID),
+    usersApi(
+      "logout",
+      { ten: CURRENT_ADMIN_USER.ten, sessionId: APP_SESSION_ID },
       { keepalive: true },
     ).catch(() => {});
   } catch (err) {}
@@ -5341,12 +5302,12 @@ function unlockAdminApp(user) {
       (isTeamGVUser(user) ? " · 👑 Toàn quyền" : "");
     headerEl.appendChild(badge);
   }
-  logUserAccess(user.ten);
   applyLoggedInUserToEmailList(user);
   renderResultRecipientNotice();
   applyRoleVisibility(user);
   applyDevToolsLock(user);
   startSessionHeartbeat(user);
+  window.dispatchEvent(new CustomEvent("ic3:login", { detail: user }));
 }
 async function handleLoginSubmit() {
   const input = document.getElementById("loginNameInput");
@@ -5362,47 +5323,33 @@ async function handleLoginSubmit() {
     btn.disabled = true;
     btn.textContent = "⏳ Đang kiểm tra...";
   }
-  setLoginStatus("⏳ Đang tải danh sách để đối chiếu...");
+  setLoginStatus("⏳ Đang kiểm tra tên đăng nhập và phiên làm việc...");
   try {
-    const rows = await fetchUserDirectory();
+    const res = await usersApi("login", {
+      ten: raw.trim(),
+      sessionId: APP_SESSION_ID,
+    });
     setLoginStatus("");
-    const match = rows.find((u) => normalizeNameForCompare(u.ten) === typed);
-    if (match) {
-      if (isTeamGVUser(match)) {
-        unlockAdminApp(match);
-        return;
+    if (res.found && res.busy) {
+      showLoginError(
+        '⚠️ Tên "' +
+          raw.trim() +
+          '" đang được sử dụng ở một thiết bị/trình duyệt khác' +
+          (res.lastActive
+            ? " (hoạt động lúc " +
+              new Date(res.lastActive).toLocaleTimeString("vi-VN") +
+              ")"
+            : "") +
+          ". Vui lòng đợi người đó thoát ra rồi thử lại, hoặc liên hệ quản trị viên nếu đây là nhầm lẫn.",
+      );
+      if (input) {
+        input.select();
+        input.focus();
       }
-      setLoginStatus("⏳ Đang kiểm tra phiên đăng nhập...");
-      try {
-        const claim = await claimUserSession(match.ten);
-        if (claim.busy) {
-          setLoginStatus("");
-          showLoginError(
-            '⚠️ Tên "' +
-              match.ten +
-              '" đang được sử dụng ở một thiết bị/trình duyệt khác' +
-              (claim.lastActive
-                ? " (hoạt động lúc " + claim.lastActive + ")"
-                : "") +
-              ". Vui lòng đợi người đó thoát ra rồi thử lại, hoặc liên hệ quản trị viên nếu đây là nhầm lẫn.",
-          );
-          if (input) {
-            input.select();
-            input.focus();
-          }
-          return;
-        }
-      } catch (err) {
-        console.error("Lỗi khi kiểm tra phiên đăng nhập:", err);
-        setLoginStatus("");
-        showLoginError(
-          "⚠️ Không kiểm tra được phiên đăng nhập (" +
-            (err.message || err) +
-            '). Kiểm tra kết nối mạng rồi bấm "Vào hệ thống" để thử lại.',
-        );
-        return;
-      }
-      unlockAdminApp(match);
+      return;
+    }
+    if (res.found && res.user) {
+      unlockAdminApp(res.user);
       return;
     }
     userLoginAttemptsLeft--;
@@ -5432,8 +5379,9 @@ async function handleLoginSubmit() {
     }
   } catch (err) {
     console.error("Lỗi khi kiểm tra tên đăng nhập:", err);
+    setLoginStatus("");
     showLoginError(
-      "⚠️ Không tải được danh sách để kiểm tra (" +
+      "⚠️ Không kiểm tra được đăng nhập (" +
         (err.message || err) +
         '). Kiểm tra kết nối mạng rồi bấm "Vào hệ thống" để thử lại.',
     );
@@ -5461,6 +5409,4 @@ if (loginExitBtnEl)
       window.close();
     } catch (err) {}
   });
-fetchUserDirectory().catch((err) =>
-  console.error("Không tải trước được danh bạ user:", err),
-);
+
