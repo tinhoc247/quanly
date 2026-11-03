@@ -4,10 +4,10 @@
  *   2. Tạo bài            (các khung tạo bài như cũ)
  *   3. Lịch sử tạo bài    (lưu localStorage của user)
  *   4. Dữ liệu tạo bài    (admin: ngân hàng câu hỏi, sửa câu hỏi, ảnh...)
- *   5. Danh sách user     (admin: xem danh sách lấy từ Google Sheet, tìm kiếm, xuất Excel)
+ *   5. Danh sách user     (admin: nhập Excel/JSON, sửa/xoá, lưu trên host)
  *
  * Chạy sau quan-ly-admin.js nên dùng được các hàm/biến toàn cục của file đó
- * (CURRENT_ADMIN_USER, isTeamGVUser, setActiveSubject, ...).
+ * (CURRENT_ADMIN_USER, isTeamGVUser, usersAdminApi, setActiveSubject, ...).
  * ===================================================================== */
 (function () {
   "use strict";
@@ -194,23 +194,6 @@
   profileCard.innerHTML = '<h2 style="cursor:default">👤 Thông tin đăng nhập</h2><div id="profileBody"></div>';
   pageEls["thong-tin"].appendChild(profileCard);
 
-  // Bản github: danh sách user nằm trong Google Sheet (Apps Script). Các cột phụ
-  // (số lần tạo bài, thời gian truy cập) nếu có trong Sheet sẽ được đọc theo tên cột.
-  let loginAt = null; // thời điểm đăng nhập trên trình duyệt này
-  let sessionNew = 0; // số lần tạo bài trong phiên này (cộng thêm vào số từ Sheet)
-  function pickField(row, patterns) {
-    if (!row) return undefined;
-    for (const k of Object.keys(row)) {
-      const nk = norm(k).replace(/[_\s]+/g, "");
-      if (patterns.some((p) => nk.includes(p))) return row[k];
-    }
-    return undefined;
-  }
-  function serverCount(u) {
-    const v = pickField(u && u.raw, ["solantao", "solan", "taobai"]);
-    const n = Number(v);
-    return v !== undefined && v !== "" && !isNaN(n) ? n : null;
-  }
   function renderProfile() {
     const body = $("profileBody");
     const u = currentUser();
@@ -223,24 +206,18 @@
       ? '<div class="link-cell"><a href="' + esc(link) + '" target="_blank" rel="noopener">' + esc(link) +
         '</a><button type="button" class="btn btn-ghost btn-sm" id="profileCopyLink">📋 Copy</button></div>'
       : '<div class="warn-box">⚠️ Tài khoản này chưa có link nhận kết quả nên chưa thể tạo bài. Vui lòng liên hệ quản trị viên.</div>';
-    const sc = serverCount(u);
-    const count = sc !== null ? sc + sessionNew : Math.max(loadHistory().length, sessionNew);
     body.innerHTML =
       '<div class="profile-grid">' +
       '<div class="k">Họ và tên</div><div><b>' + esc(u.ten) + "</b>" +
       (isAdmin() ? ' <span class="badge badge-on">Toàn quyền</span>' : "") + "</div>" +
       '<div class="k">Team</div><div>' + (esc(u.team) || "—") + "</div>" +
       '<div class="k">Link app nhận kết quả</div><div>' + linkHtml + "</div>" +
-      '<div class="k">Số lần tạo bài</div><div><span class="profile-big">' + count + "</span></div>" +
-      '<div class="k">Đăng nhập lúc</div><div>' + esc(fmtDateTime(loginAt)) + "</div>" +
+      '<div class="k">Số lần tạo bài</div><div><span class="profile-big">' + (Number(u.soLanTaoBai) || 0) + "</span></div>" +
+      '<div class="k">Đăng nhập lúc</div><div>' + esc(fmtDateTime(u.thoiGianTruyCap)) + "</div>" +
       "</div>";
     const cp = $("profileCopyLink");
     if (cp) cp.onclick = () => copyText(link, "Đã copy link nhận kết quả.");
   }
-  window.addEventListener("ic3:taobai", () => {
-    sessionNew++;
-    renderProfile();
-  });
   window.addEventListener("ic3:user-updated", () => {
     renderProfile();
   });
@@ -356,137 +333,432 @@
   };
 
   // ======================================================================
-  // Trang 5: Danh sách user (admin) — chỉ xem, dữ liệu lấy từ Google Sheet
+  // Trang 5: Danh sách user (admin) — lưu trên host (Firestore qua Netlify function)
   // ======================================================================
   const usersCard = document.createElement("div");
   usersCard.className = "card";
   usersCard.innerHTML =
     '<h2 style="cursor:default">👥 Danh sách user</h2>' +
-    '<p class="desc">Danh sách tài khoản được phép đăng nhập, lấy từ <b>Google Sheet</b> của hệ thống. ' +
-    "Muốn thêm / sửa / xoá user, hãy chỉnh trực tiếp trong Google Sheet rồi bấm <b>Tải lại</b>.</p>" +
+    '<p class="desc">Quản lý tài khoản được phép đăng nhập. Dữ liệu được <b>lưu trên host của hệ thống</b>. ' +
+    "Nhập từ Excel (.xlsx) hoặc JSON với các cột: <code>Tên</code>, <code>Team</code>, <code>Link nhận kết quả</code>. " +
+    "Cột <b>SessionID</b> do hệ thống tự cấp để chặn một tên bị đăng nhập ở nhiều nơi cùng lúc — " +
+    'bấm <b>Gỡ phiên</b> nếu ai đó bị kẹt phiên.</p>' +
     '<div class="toolbar">' +
     '<div class="grow"><input type="search" id="usersSearch" placeholder="🔎 Tìm theo tên, team, link..."></div>' +
-    '<button type="button" class="btn btn-ghost" id="usersReloadBtn">🔄 Tải lại</button>' +
-    '<button type="button" class="btn btn-ghost" id="usersExportXlsx">⬇️ Xuất Excel</button></div>' +
-    '<div class="toolbar"><span class="hint" id="usersSummary" style="margin:0"></span></div>' +
+    '<button type="button" class="btn btn-primary" id="usersAddBtn">➕ Thêm user</button>' +
+    '<button type="button" class="btn btn-ghost" id="usersReloadBtn">🔄 Tải lại</button></div>' +
+    '<div class="toolbar">' +
+    '<label class="btn btn-ghost file-input-wrap">⬆️ Nhập Excel<input type="file" id="usersImportXlsx" accept=".xlsx,.xls"></label>' +
+    '<label class="btn btn-ghost file-input-wrap">⬆️ Nhập JSON<input type="file" id="usersImportJson" accept=".json,application/json"></label>' +
+    '<button type="button" class="btn btn-ghost" id="usersExportXlsx">⬇️ Xuất Excel</button>' +
+    '<button type="button" class="btn btn-ghost" id="usersExportJson">⬇️ Xuất JSON</button>' +
+    '<button type="button" class="btn btn-ghost" id="usersTemplateBtn">📄 File mẫu</button>' +
+    '<button type="button" class="btn btn-ghost" id="usersLegacyBtn" title="Lấy danh sách từ Google Sheet đang dùng trước đây">📥 Nhập từ Google Sheet cũ</button>' +
+    '<label class="chk"><input type="checkbox" id="usersReplaceMode"> Thay thế toàn bộ (xoá user không có trong file)</label></div>' +
+    '<div class="toolbar"><button type="button" class="btn btn-danger" id="usersDeleteSelectedBtn" disabled>🗑️ Xoá các dòng đã chọn</button>' +
+    '<span class="hint" id="usersSummary" style="margin:0"></span></div>' +
     '<div id="usersLog" class="log"></div>' +
     '<div class="table-wrap"><table class="shell-table"><thead><tr>' +
+    '<th class="num"><input type="checkbox" id="usersSelectAll"></th>' +
     '<th class="num">#</th>' +
     '<th data-sort="ten" class="sortable" style="cursor:pointer;user-select:none" title="Bấm để sắp xếp">Tên<span class="sort-ind"></span></th>' +
     '<th data-sort="team" class="sortable" style="cursor:pointer;user-select:none" title="Bấm để sắp xếp">Team<span class="sort-ind"></span></th>' +
-    "<th>Link nhận kết quả</th>" +
-    "<th>Thời gian truy cập</th>" +
-    '<th class="num">Số lần tạo bài</th>' +
+    '<th>Link nhận kết quả</th>' +
+    '<th data-sort="time" class="sortable" style="cursor:pointer;user-select:none" title="Bấm để sắp xếp">Thời gian truy cập<span class="sort-ind"></span></th>' +
+    '<th data-sort="count" class="num sortable" style="cursor:pointer;user-select:none" title="Bấm để sắp xếp">Số lần tạo bài<span class="sort-ind"></span></th>' +
+    '<th>SessionID</th><th></th>' +
     '</tr></thead><tbody id="usersTbody"></tbody></table></div>';
   pageEls["danh-sach-user"].appendChild(usersCard);
 
   let USERS = [];
   let usersLoaded = false;
-  let usersSort = null; // { key: "ten" | "team", dir: 1 | -1 }
+  let editingId = null; // id đang sửa, hoặc "__new__"
+  const selectedIds = new Set();
+  let usersTimer = null;
+
   const usersLog = () => $("usersLog");
 
-  function cmpText(a, b) {
-    return String(a || "").localeCompare(String(b || ""), "vi", { sensitivity: "base" });
-  }
-  function userView(r) {
-    const when = pickField(r, ["thoigian", "truycap", "checkin", "lastaccess"]);
-    const cnt = pickField(r, ["solantao", "solan", "taobai"]);
-    return {
-      ten: String(r.ten || "").trim(),
-      team: String(r.team || "").trim(),
-      link: String(r.link || "").trim(),
-      when: when === undefined || when === "" ? "" : String(when),
-      count: cnt === undefined || cnt === "" ? "" : cnt,
-    };
-  }
-  function filteredUsers() {
-    const q = norm($("usersSearch").value);
-    let list = USERS.map(userView).filter((u) => u.ten);
-    if (q) list = list.filter((u) => norm(u.ten + " " + u.team + " " + u.link).includes(q));
-    if (usersSort) {
-      const { key, dir } = usersSort;
-      list = list.slice().sort((a, b) => dir * cmpText(a[key], b[key]));
-    }
-    return list;
-  }
-  function renderUsers() {
-    const tbody = $("usersTbody");
-    const list = filteredUsers();
-    if (!list.length) {
-      tbody.innerHTML =
-        '<tr><td colspan="6" class="empty-cell">' +
-        (USERS.length ? "Không có user nào khớp từ khoá." : "Chưa có user nào.") + "</td></tr>";
-    } else {
-      tbody.innerHTML = list
-        .map(
-          (u, i) =>
-            "<tr>" +
-            '<td class="num">' + (i + 1) + "</td>" +
-            "<td><b>" + esc(u.ten) + "</b></td>" +
-            "<td>" + (esc(u.team) || "—") + "</td>" +
-            '<td class="linkcol">' +
-            (u.link ? '<a href="' + esc(u.link) + '" target="_blank" rel="noopener">' + esc(u.link) + "</a>" : "—") + "</td>" +
-            '<td class="nowrap">' + (esc(u.when) || "—") + "</td>" +
-            '<td class="num">' + (u.count === "" ? "—" : esc(u.count)) + "</td></tr>",
-        )
-        .join("");
-    }
-    $("usersSummary").textContent = USERS.length
-      ? "Hiển thị " + list.length + " / " + USERS.length + " user."
-      : "";
-    document.querySelectorAll("#page-danh-sach-user th[data-sort]").forEach((th) => {
-      const ind = th.querySelector(".sort-ind");
-      ind.textContent = usersSort && usersSort.key === th.dataset.sort ? (usersSort.dir === 1 ? " ▲" : " ▼") : "";
-    });
-  }
   async function loadUsers(silent) {
-    if (typeof USER_DIRECTORY_URL === "undefined") return;
-    if (!silent) showLog(usersLog(), "info", "⏳ Đang tải danh sách user từ Google Sheet...");
+    if (!silent) showLog(usersLog(), "info", "⏳ Đang tải danh sách user từ máy chủ...");
     try {
-      const res = await fetch(USER_DIRECTORY_URL + "?action=list&_=" + Date.now());
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const json = await res.json();
-      if (!json || json.ok === false || !Array.isArray(json.rows))
-        throw new Error((json && json.error) || "Dữ liệu trả về không hợp lệ");
-      USERS = json.rows;
+      const res = await usersAdminApi("list", {});
+      USERS = res.users || [];
       usersLoaded = true;
-      usersLog().className = "log";
+      if (!silent) usersLog().className = "log";
+      // bỏ chọn các id không còn tồn tại
+      [...selectedIds].forEach((id) => {
+        if (!USERS.some((u) => u.id === id)) selectedIds.delete(id);
+      });
       renderUsers();
     } catch (err) {
       showLog(usersLog(), "err", "❌ Không tải được danh sách user: " + err.message);
     }
   }
-  $("usersSearch").oninput = renderUsers;
-  $("usersReloadBtn").onclick = () => loadUsers(false);
-  document.querySelectorAll("#page-danh-sach-user th[data-sort]").forEach((th) => {
-    th.onclick = () => {
-      const key = th.dataset.sort;
-      if (!usersSort || usersSort.key !== key) usersSort = { key, dir: 1 };
-      else if (usersSort.dir === 1) usersSort = { key, dir: -1 };
-      else usersSort = null;
-      renderUsers();
+
+  // Sắp xếp danh sách ngay trên trình duyệt (bấm tiêu đề cột: tăng dần -> giảm dần -> về mặc định)
+  let usersSort = null; // { key: "ten"|"team"|"time"|"count", dir: 1 | -1 }
+  function cmpText(a, b) {
+    return String(a || "").trim().localeCompare(String(b || "").trim(), "vi", { numeric: true, sensitivity: "base" });
+  }
+  function sortUsersList(list) {
+    if (!usersSort) return list;
+    const { key, dir } = usersSort;
+    const timeOf = (u) => Date.parse(u.thoiGianTruyCap) || 0;
+    return list.slice().sort((a, b) => {
+      let c = 0;
+      if (key === "team") {
+        // user chưa có team luôn nằm cuối, dù sắp tăng hay giảm
+        const ea = !String(a.team || "").trim(), eb = !String(b.team || "").trim();
+        if (ea !== eb) return ea ? 1 : -1;
+        c = cmpText(a.team, b.team) * dir;
+      } else if (key === "time") c = (timeOf(a) - timeOf(b)) * dir;
+      else if (key === "count") c = ((Number(a.soLanTaoBai) || 0) - (Number(b.soLanTaoBai) || 0)) * dir;
+      else c = cmpText(a.ten, b.ten) * dir;
+      return c || cmpText(a.ten, b.ten); // cùng giá trị -> xếp theo tên
+    });
+  }
+  function updateSortIndicators() {
+    usersCard.querySelectorAll("th[data-sort]").forEach((th) => {
+      const ind = th.querySelector(".sort-ind");
+      if (!ind) return;
+      ind.textContent =
+        usersSort && usersSort.key === th.dataset.sort ? (usersSort.dir === 1 ? " ▲" : " ▼") : "";
+    });
+  }
+
+  function filteredUsers() {
+    const q = norm($("usersSearch").value);
+    const base = q ? USERS.filter((u) => norm(u.ten + " " + u.team + " " + u.link).includes(q)) : USERS;
+    return sortUsersList(base);
+  }
+
+  function userRowHtml(u, idx) {
+    if (editingId === u.id) return userEditRowHtml(u, idx);
+    const sess = u.sessionId
+      ? '<span class="badge ' + (u.online ? "badge-on" : "badge-off") + '">' + (u.online ? "Đang online" : "Hết hạn") +
+        '</span><div class="sess-id" title="' + esc(u.sessionId) + '">' + esc(u.sessionId.slice(0, 8)) + "…</div>"
+      : '<span class="badge badge-off">Trống</span>';
+    const isRoot = norm(u.ten) === "teamgv";
+    return (
+      "<tr>" +
+      '<td class="num"><input type="checkbox" data-sel="' + esc(u.id) + '"' + (selectedIds.has(u.id) ? " checked" : "") + (isRoot ? " disabled" : "") + "></td>" +
+      '<td class="num">' + (idx + 1) + "</td>" +
+      "<td><b>" + esc(u.ten) + "</b></td>" +
+      "<td>" + (esc(u.team) || "—") + "</td>" +
+      '<td class="linkcol">' + (u.link ? '<a href="' + esc(u.link) + '" target="_blank" rel="noopener">' + esc(u.link) + "</a>" : '<span class="hint" style="margin:0">Chưa có link</span>') + "</td>" +
+      '<td class="nowrap">' + esc(fmtDateTime(u.thoiGianTruyCap)) + "</td>" +
+      '<td class="num">' + (Number(u.soLanTaoBai) || 0) + "</td>" +
+      "<td>" + sess + "</td>" +
+      '<td><div class="row-actions">' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-act="edit" data-id="' + esc(u.id) + '">✏️ Sửa</button>' +
+      (u.sessionId ? '<button type="button" class="btn btn-ghost btn-sm" data-act="clear" data-id="' + esc(u.id) + '">🔓 Gỡ phiên</button>' : "") +
+      (isRoot ? "" : '<button type="button" class="btn btn-danger btn-sm" data-act="del" data-id="' + esc(u.id) + '">🗑️ Xoá</button>') +
+      "</div></td></tr>"
+    );
+  }
+
+  function userEditRowHtml(u, idx) {
+    const isNew = editingId === "__new__";
+    return (
+      '<tr class="row-editing">' +
+      '<td class="num"></td><td class="num">' + (isNew ? "＋" : idx + 1) + "</td>" +
+      '<td><input type="text" id="editTen" value="' + esc(u.ten) + '" placeholder="Họ và tên"></td>' +
+      '<td><input type="text" id="editTeam" value="' + esc(u.team) + '" placeholder="Team"></td>' +
+      '<td><input type="text" id="editLink" value="' + esc(u.link) + '" placeholder="https://script.google.com/macros/s/.../exec"></td>' +
+      '<td class="nowrap">' + esc(fmtDateTime(u.thoiGianTruyCap)) + "</td>" +
+      '<td class="num">' + (Number(u.soLanTaoBai) || 0) + "</td>" +
+      '<td><span class="hint" style="margin:0">—</span></td>' +
+      '<td><div class="row-actions">' +
+      '<button type="button" class="btn btn-primary btn-sm" data-act="save">💾 Lưu</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-act="cancel">Huỷ</button>' +
+      "</div></td></tr>"
+    );
+  }
+
+  function renderUsers() {
+    const tbody = $("usersTbody");
+    const list = filteredUsers();
+    let html = "";
+    if (editingId === "__new__") html += userEditRowHtml({ ten: "", team: "", link: "" }, -1);
+    if (!list.length && editingId !== "__new__") {
+      html +=
+        '<tr><td colspan="9" class="empty-cell">' +
+        (USERS.length ? "Không có user nào khớp từ khoá." : "Chưa có user nào. Hãy nhập từ Excel/JSON hoặc bấm “Thêm user”.") +
+        "</td></tr>";
+    } else {
+      html += list.map((u, i) => userRowHtml(u, i)).join("");
+    }
+    tbody.innerHTML = html;
+    updateSortIndicators();
+    const online = USERS.filter((u) => u.online).length;
+    $("usersSummary").textContent = USERS.length
+      ? "Tổng " + USERS.length + " user · " + online + " đang online" +
+        (selectedIds.size ? " · đã chọn " + selectedIds.size : "")
+      : "";
+    $("usersDeleteSelectedBtn").disabled = selectedIds.size === 0;
+    const all = $("usersSelectAll");
+    const selectable = list.filter((u) => norm(u.ten) !== "teamgv");
+    all.checked = selectable.length > 0 && selectable.every((u) => selectedIds.has(u.id));
+    const first = $("editTen");
+    if (first && !first.dataset.focused) {
+      first.dataset.focused = "1";
+      first.focus();
+    }
+  }
+
+  async function saveEditingRow() {
+    const user = {
+      ten: $("editTen").value.trim(),
+      team: $("editTeam").value.trim(),
+      link: $("editLink").value.trim(),
     };
-  });
-  $("usersExportXlsx").onclick = () => {
-    if (typeof XLSX === "undefined") {
-      showLog(usersLog(), "err", "❌ Thư viện Excel chưa tải được, kiểm tra kết nối mạng.");
+    if (!user.ten) {
+      toast("Tên không được để trống.");
       return;
     }
-    const rows = filteredUsers().map((u) => ({
-      "Tên": u.ten,
-      "Team": u.team,
-      "Link nhận kết quả": u.link,
-      "Thời gian truy cập": u.when,
-      "Số lần tạo bài": u.count,
-    }));
-    if (!rows.length) {
-      showLog(usersLog(), "err", "❌ Không có dữ liệu để xuất.");
+    if (user.link && !/^https?:\/\//i.test(user.link)) {
+      toast("Link phải bắt đầu bằng http:// hoặc https://");
+      return;
+    }
+    try {
+      await usersAdminApi("upsert", {
+        user,
+        originalId: editingId === "__new__" ? "" : editingId,
+      });
+      editingId = null;
+      showLog(usersLog(), "ok", "✅ Đã lưu user “" + user.ten + "” lên host.");
+      await loadUsers(true);
+    } catch (err) {
+      showLog(usersLog(), "err", "❌ " + err.message);
+    }
+  }
+
+  async function deleteUsers(ids) {
+    if (!ids.length) return;
+    const names = ids.map((id) => (USERS.find((u) => u.id === id) || {}).ten || id);
+    const msg =
+      ids.length === 1
+        ? "Xoá user “" + names[0] + "”?"
+        : "Xoá " + ids.length + " user đã chọn?\n\n" + names.slice(0, 10).join(", ") + (names.length > 10 ? ", ..." : "");
+    if (!confirm(msg + "\nHành động này không thể hoàn tác.")) return;
+    try {
+      const res = await usersAdminApi("delete", { ids });
+      ids.forEach((id) => selectedIds.delete(id));
+      showLog(usersLog(), "ok", "🗑️ Đã xoá " + res.deleted + " user." + (res.protected ? " (Tài khoản quản trị được giữ lại.)" : ""));
+      await loadUsers(true);
+    } catch (err) {
+      showLog(usersLog(), "err", "❌ " + err.message);
+    }
+  }
+
+  $("usersTbody").onclick = async (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const act = btn.dataset.act;
+    const id = btn.dataset.id;
+    if (act === "edit") {
+      editingId = id;
+      renderUsers();
+    } else if (act === "cancel") {
+      editingId = null;
+      renderUsers();
+    } else if (act === "save") {
+      await saveEditingRow();
+    } else if (act === "del") {
+      await deleteUsers([id]);
+    } else if (act === "clear") {
+      try {
+        await usersAdminApi("clear-session", { id });
+        showLog(usersLog(), "ok", "🔓 Đã gỡ phiên đăng nhập.");
+        await loadUsers(true);
+      } catch (err) {
+        showLog(usersLog(), "err", "❌ " + err.message);
+      }
+    }
+  };
+  $("usersTbody").onchange = (e) => {
+    const cb = e.target.closest("input[data-sel]");
+    if (!cb) return;
+    if (cb.checked) selectedIds.add(cb.dataset.sel);
+    else selectedIds.delete(cb.dataset.sel);
+    renderUsers();
+  };
+  $("usersTbody").onkeydown = (e) => {
+    if (e.key === "Enter" && e.target.closest(".row-editing")) saveEditingRow();
+    if (e.key === "Escape" && editingId) {
+      editingId = null;
+      renderUsers();
+    }
+  };
+  $("usersSelectAll").onchange = (e) => {
+    filteredUsers().forEach((u) => {
+      if (norm(u.ten) === "teamgv") return;
+      if (e.target.checked) selectedIds.add(u.id);
+      else selectedIds.delete(u.id);
+    });
+    renderUsers();
+  };
+  $("usersDeleteSelectedBtn").onclick = () => deleteUsers([...selectedIds]);
+  $("usersSearch").oninput = renderUsers;
+  usersCard.querySelector("thead").onclick = (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    const key = th.dataset.sort;
+    if (!usersSort || usersSort.key !== key) usersSort = { key, dir: 1 };
+    else if (usersSort.dir === 1) usersSort = { key, dir: -1 };
+    else usersSort = null;
+    renderUsers();
+  };
+  $("usersAddBtn").onclick = () => {
+    editingId = "__new__";
+    $("usersSearch").value = "";
+    renderUsers();
+  };
+  $("usersReloadBtn").onclick = () => loadUsers(false);
+
+  // ----- Nhập / xuất -----
+  const HEADER_MAP = {
+    ten: "ten", hoten: "ten", hovaten: "ten", name: "ten", fullname: "ten", user: "ten", username: "ten", nguoidung: "ten",
+    team: "team", nhom: "team", doi: "team", phongban: "team",
+    link: "link", linknhanketqua: "link", linkketqua: "link", linkapp: "link", url: "link", webapp: "link", linkappnhanketqua: "link",
+    solantaobai: "soLanTaoBai", solan: "soLanTaoBai", sobai: "soLanTaoBai",
+  };
+  function headerKey(h) {
+    return HEADER_MAP[norm(h).replace(/[^a-z0-9]/g, "")] || null;
+  }
+  function rowsToUsers(rows) {
+    const out = [];
+    rows.forEach((r) => {
+      const u = {};
+      Object.keys(r || {}).forEach((k) => {
+        const mapped = headerKey(k);
+        if (mapped) u[mapped] = r[k];
+      });
+      if (u.ten && String(u.ten).trim()) out.push(u);
+    });
+    return out;
+  }
+
+  async function runImport(users, sourceLabel) {
+    if (!users.length) {
+      showLog(usersLog(), "err", "❌ Không tìm thấy dòng hợp lệ nào trong " + sourceLabel + " (cần có cột “Tên”).");
+      return;
+    }
+    const replace = $("usersReplaceMode").checked;
+    const msg =
+      "Nhập " + users.length + " user từ " + sourceLabel + "?\n\n" +
+      (replace
+        ? "CHẾ ĐỘ THAY THẾ: user không có trong file sẽ bị XOÁ (trừ tài khoản quản trị)."
+        : "Chế độ gộp: user trùng tên sẽ được cập nhật Team/Link, user mới được thêm vào; không xoá ai.");
+    if (!confirm(msg)) return;
+    showLog(usersLog(), "info", "⏳ Đang lưu lên host...");
+    try {
+      const res = await usersAdminApi("import", { users, mode: replace ? "replace" : "merge" });
+      showLog(
+        usersLog(),
+        "ok",
+        "✅ Nhập xong: thêm mới " + res.added + ", cập nhật " + res.updated +
+          (res.removed ? ", xoá " + res.removed : "") + (res.skipped ? ", bỏ qua " + res.skipped + " dòng thiếu tên" : "") + ".",
+      );
+      await loadUsers(true);
+    } catch (err) {
+      showLog(usersLog(), "err", "❌ Nhập thất bại: " + err.message);
+    }
+  }
+
+  $("usersImportXlsx").onchange = async (e) => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    try {
+      if (typeof XLSX === "undefined") throw new Error("Thư viện đọc Excel chưa tải được.");
+      const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      await runImport(rowsToUsers(rows), "file Excel “" + f.name + "”");
+    } catch (err) {
+      showLog(usersLog(), "err", "❌ Không đọc được file Excel: " + err.message);
+    }
+  };
+  $("usersImportJson").onchange = async (e) => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      const arr = Array.isArray(data) ? data : data.users || data.rows || data.data || [];
+      if (!Array.isArray(arr)) throw new Error("JSON phải là một mảng các user.");
+      await runImport(rowsToUsers(arr), "file JSON “" + f.name + "”");
+    } catch (err) {
+      showLog(usersLog(), "err", "❌ Không đọc được file JSON: " + err.message);
+    }
+  };
+  $("usersLegacyBtn").onclick = async () => {
+    if (typeof USER_DIRECTORY_URL === "undefined") return;
+    showLog(usersLog(), "info", "⏳ Đang lấy danh sách từ Google Sheet cũ...");
+    try {
+      const res = await fetch(USER_DIRECTORY_URL + "?action=list&_=" + Date.now());
+      const json = await res.json();
+      if (!json || json.ok === false || !Array.isArray(json.rows)) throw new Error((json && json.error) || "Dữ liệu không hợp lệ");
+      usersLog().className = "log";
+      await runImport(rowsToUsers(json.rows), "Google Sheet cũ");
+    } catch (err) {
+      showLog(usersLog(), "err", "❌ Không lấy được từ Google Sheet cũ: " + err.message);
+    }
+  };
+
+  function xlsxDownload(rows, sheetName, fileName) {
+    if (typeof XLSX === "undefined") {
+      toast("Thư viện Excel chưa tải được.");
       return;
     }
     const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [{ wch: 26 }, { wch: 16 }, { wch: 70 }, { wch: 18 }, { wch: 14 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Users");
-    XLSX.writeFile(wb, "danh-sach-user.xlsx");
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    XLSX.writeFile(wb, fileName);
+  }
+  $("usersExportXlsx").onclick = () => {
+    if (!USERS.length) return toast("Chưa có dữ liệu để xuất.");
+    xlsxDownload(
+      USERS.map((u) => ({
+        "Tên": u.ten,
+        "Team": u.team,
+        "Link nhận kết quả": u.link,
+        "Thời gian truy cập": fmtDateTime(u.thoiGianTruyCap),
+        "Số lần tạo bài": Number(u.soLanTaoBai) || 0,
+      })),
+      "Users",
+      "danh-sach-user.xlsx",
+    );
+  };
+  $("usersTemplateBtn").onclick = () =>
+    xlsxDownload(
+      [
+        { "Tên": "Nguyễn Văn A", "Team": "Team 1", "Link nhận kết quả": "https://script.google.com/macros/s/XXXX/exec" },
+        { "Tên": "Trần Thị B", "Team": "Team 2", "Link nhận kết quả": "https://script.google.com/macros/s/YYYY/exec" },
+      ],
+      "Users",
+      "mau-danh-sach-user.xlsx",
+    );
+  $("usersExportJson").onclick = () => {
+    if (!USERS.length) return toast("Chưa có dữ liệu để xuất.");
+    const data = USERS.map((u) => ({
+      ten: u.ten,
+      team: u.team,
+      link: u.link,
+      soLanTaoBai: Number(u.soLanTaoBai) || 0,
+    }));
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "danh-sach-user.json";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 500);
   };
 
   // ======================================================================
@@ -530,11 +802,16 @@
     const stats = headerEl.querySelector(".stat-row");
     if (stats) stats.style.display = page.id === "tao-bai" || page.id === "du-lieu" ? "" : "none";
 
+    clearInterval(usersTimer);
     if (page.id === "thong-tin") renderProfile();
     if (page.id === "lich-su") renderHistory();
     if (page.id === "du-lieu") syncLevelSelect();
     if (page.id === "danh-sach-user") {
       loadUsers(usersLoaded);
+      // tự làm mới 30s/lần để theo dõi phiên online, trừ khi đang sửa dòng
+      usersTimer = setInterval(() => {
+        if (!editingId && !document.hidden) loadUsers(true);
+      }, 30000);
     }
     window.scrollTo({ top: 0 });
   }
@@ -553,11 +830,7 @@
     if (!confirm("Đăng xuất khỏi tài khoản “" + u.ten + "”?")) return;
     try {
       if (typeof stopSessionHeartbeat === "function") stopSessionHeartbeat();
-      if (typeof USER_DIRECTORY_URL !== "undefined" && !isAdmin())
-        await fetch(
-          USER_DIRECTORY_URL + "?action=logout&ten=" + encodeURIComponent(u.ten) +
-            "&sessionId=" + encodeURIComponent(APP_SESSION_ID) + "&_=" + Date.now(),
-        );
+      await usersApi("logout", { ten: u.ten, sessionId: APP_SESSION_ID });
     } catch (e) {}
     location.hash = "";
     location.reload();
@@ -567,7 +840,6 @@
   function onLoggedIn() {
     const u = currentUser();
     if (!u) return;
-    if (!loginAt) loginAt = new Date().toISOString();
     $("shellUserChip").innerHTML =
       "<b>" + esc(u.ten) + "</b><span>" + (esc(u.team) || "—") + (isAdmin() ? " · 👑 Toàn quyền" : "") + "</span>";
     buildNav();
