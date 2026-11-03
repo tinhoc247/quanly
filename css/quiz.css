@@ -436,3 +436,29 @@ html[data-theme=dark] body.pre-start .start-card { background: rgba(20, 27, 56, 
 .option.selected:not(.disabled):hover { background: var(--blue-pale) !important; }
 /* Chọn đáp án (vẽ lại cùng câu) không chạy lại hiệu ứng xuất hiện -> hết chớp */
 #mainCard.no-enter > *, #mainCard.no-enter .options .option { animation: none !important; }
+
+/* ===== Bài kiểm tra (máy tính): tiêu đề dài thì xuống hàng, đồng hồ luôn hiện ===== */
+@media (min-width: 601px) {
+  body.mode-kiemtra .header { display: flex !important; align-items: center !important; gap: 18px !important; }
+  body.mode-kiemtra .header-left { flex: 1 1 0 !important; min-width: 0 !important; }
+  body.mode-kiemtra .header-left > div:last-child { min-width: 0 !important; overflow: visible !important; flex: 1 1 auto; }
+  body.mode-kiemtra .header-title,
+  body.mode-kiemtra .header-topic {
+    display: block;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere;
+  }
+  body.mode-kiemtra .header-topic { line-height: 1.35; }
+  /* Đồng hồ nằm trong dòng chảy; bỏ left/top/transform thừa làm nó trôi ra ngoài khung */
+  body.mode-kiemtra .header-center {
+    position: static !important;
+    transform: none !important;
+    left: auto !important; top: auto !important;
+    flex: 0 0 auto !important;
+    min-width: 0 !important;
+  }
+  body.mode-kiemtra .header-right { flex: 0 1 auto !important; max-width: 32%; }
+  body.mode-kiemtra .header-right #studentBadge { overflow-wrap: anywhere; }
+}
