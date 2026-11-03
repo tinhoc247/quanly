@@ -5,7 +5,7 @@
  * Apps Script (free tuyệt đối, không cần thẻ thanh toán), gọi Firestore qua REST API bằng
  * service-account JWT tự ký, và gọi GitHub Contents API qua UrlFetchApp.
  *
- * 6 action: admin-load, admin-save, get-exam, submit-result, deploy-site, host-usage
+ * 7 action: admin-load, admin-save, get-exam, submit-result, deploy-site, host-usage, users
  * — gửi tất cả qua CÙNG 1 URL, phân biệt bằng field "action" trong JSON body (khác
  * Cloud Functions: mỗi function có URL riêng).
  *
@@ -64,7 +64,7 @@ function cfg_(key) {
 // doPost / doGet — điểm vào duy nhất của Web App
 // ---------------------------------------------------------------------------
 // không cần adminKey: "get-exam" (tải đề đã ẩn đáp án) và "submit-result" (nộp bài, chấm ở server)
-var PUBLIC_ACTIONS = ["get-exam", "submit-result"];
+var PUBLIC_ACTIONS = ["get-exam", "submit-result", "users"];
 
 function doPost(e) {
   var body = {};
@@ -107,6 +107,9 @@ function doPost(e) {
         break;
       case "host-usage":
         result = actionHostUsage_(body);
+        break;
+      case "users":
+        result = actionUsers_(body);
         break;
       default:
         result = { status: "error", message: 'Action không hợp lệ: "' + action + '".' };
@@ -873,6 +876,344 @@ function actionHostUsage_(body) {
     }
   });
   return { status: "ok", data: data };
+}
+
+// ---------------------------------------------------------------------------
+// users — danh sách user + phiên đăng nhập (Firestore, collection "users")
+// ---------------------------------------------------------------------------
+// Body: { action:"users", op, ...tham số }
+// Mỗi document: { ten, team, link, thoiGianTruyCap, soLanTaoBai, sessionId, lastActive }
+//
+// op dành cho người dùng đăng nhập (KHÔNG cần adminKey):
+//   login        { ten, sessionId }  -> kiểm tra tên, chiếm phiên (chống đăng nhập cùng lúc)
+//   heartbeat    { ten, sessionId }  -> giữ phiên; trả kicked:true nếu phiên đã bị thay
+//   logout       { ten, sessionId }  -> nhả phiên
+//   log-taobai   { ten, sessionId }  -> tăng "số lần tạo bài" lên 1
+// op dành cho quản trị (BẮT BUỘC adminKey):
+//   list | upsert { user, originalId } | import { users, mode } | delete { ids } | clear-session { id }
+var USERS_COLLECTION = "users";
+var USERS_ADMIN_NAME = "teamgv";
+var USERS_SESSION_TIMEOUT_MS = 150 * 1000; // heartbeat 45s/lần -> quá 150s coi là đã thoát
+
+function usersNormalize_(s) {
+  return String(s || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+function usersDocId_(ten) {
+  return usersNormalize_(ten).replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+function usersIsAdmin_(ten) {
+  return usersNormalize_(ten) === USERS_ADMIN_NAME;
+}
+function usersClean_(v) {
+  return String(v == null ? "" : v).trim();
+}
+function usersPublic_(id, d) {
+  return {
+    id: id,
+    ten: d.ten || "",
+    team: d.team || "",
+    link: d.link || "",
+    thoiGianTruyCap: d.thoiGianTruyCap || "",
+    soLanTaoBai: Number(d.soLanTaoBai) || 0,
+    sessionId: d.sessionId || "",
+    lastActive: d.lastActive || "",
+  };
+}
+function usersAlive_(d, nowMs) {
+  if (!d.sessionId || !d.lastActive) return false;
+  var t = Date.parse(d.lastActive);
+  return isFinite(t) && nowMs - t < USERS_SESSION_TIMEOUT_MS;
+}
+function usersGet_(id) {
+  var r = fsFetch_("/" + USERS_COLLECTION + "/" + encodeURIComponent(id), "get");
+  if (r.code === 404) return null;
+  if (r.code !== 200) throw new Error("Lỗi đọc Firestore: " + r.text);
+  return fsDecodeFields_(r.json.fields || {});
+}
+// Ghi đè cả document
+function usersSet_(id, obj) {
+  var r = fsFetch_("/" + USERS_COLLECTION + "/" + encodeURIComponent(id), "patch", { fields: fsEncodeFields_(obj) });
+  if (r.code !== 200) throw new Error("Lỗi ghi Firestore: " + r.text);
+}
+// Chỉ cập nhật vài trường (các trường khác giữ nguyên)
+function usersUpdate_(id, partial) {
+  var mask = Object.keys(partial)
+    .map(function (k) { return "updateMask.fieldPaths=" + encodeURIComponent(k); })
+    .join("&");
+  var r = fsFetch_("/" + USERS_COLLECTION + "/" + encodeURIComponent(id) + "?" + mask, "patch", { fields: fsEncodeFields_(partial) });
+  if (r.code !== 200) throw new Error("Lỗi ghi Firestore: " + r.text);
+}
+function usersDocName_(id) {
+  return "projects/" + cfg_("FIREBASE_PROJECT_ID") + "/databases/(default)/documents/" + USERS_COLLECTION + "/" + id;
+}
+// Ghi/xoá hàng loạt bằng :commit (tối đa 500 thao tác/lần)
+function usersCommit_(ops) {
+  for (var i = 0; i < ops.length; i += 400) {
+    var writes = ops.slice(i, i + 400).map(function (op) {
+      return op.type === "set"
+        ? { update: { name: usersDocName_(op.id), fields: fsEncodeFields_(op.doc) } }
+        : { delete: usersDocName_(op.id) };
+    });
+    var r = fsFetch_(":commit", "post", { writes: writes });
+    if (r.code !== 200) throw new Error("Lỗi ghi hàng loạt Firestore: " + r.text);
+  }
+}
+function usersListAll_() {
+  var all = [];
+  var pageToken = null;
+  do {
+    var qs = "?pageSize=300" + (pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "");
+    var r = fsFetch_("/" + USERS_COLLECTION + qs, "get");
+    if (r.code !== 200) throw new Error("Lỗi đọc Firestore: " + r.text);
+    ((r.json && r.json.documents) || []).forEach(function (doc) {
+      all.push({ id: doc.name.split("/").pop(), data: fsDecodeFields_(doc.fields || {}) });
+    });
+    pageToken = (r.json && r.json.nextPageToken) || null;
+  } while (pageToken);
+  return all;
+}
+
+function actionUsers_(body) {
+  var op = String(body.op || "");
+  var adminOps = ["list", "upsert", "import", "delete", "clear-session"];
+  var publicOps = ["login", "heartbeat", "logout", "log-taobai"];
+  if (adminOps.indexOf(op) === -1 && publicOps.indexOf(op) === -1) {
+    return { status: "error", message: 'Thao tác users không hợp lệ: "' + op + '".' };
+  }
+  if (adminOps.indexOf(op) !== -1) {
+    if (body.adminKey !== cfg_("ADMIN_KEY")) return { status: "error", message: "Sai admin key." };
+  }
+  // heartbeat/logout chỉ cập nhật 1-2 trường nên không cần khoá; các thao tác còn lại khoá để
+  // tránh 2 request cùng lúc làm sai phiên đăng nhập hoặc số lần tạo bài.
+  var needLock = op !== "heartbeat" && op !== "logout";
+  var lock = null;
+  if (needLock) {
+    lock = LockService.getScriptLock();
+    lock.waitLock(20000);
+  }
+  try {
+    switch (op) {
+      case "login": return usersLogin_(body);
+      case "heartbeat": return usersHeartbeat_(body);
+      case "logout": return usersLogout_(body);
+      case "log-taobai": return usersLogTaoBai_(body);
+      case "list": return usersList_();
+      case "upsert": return usersUpsert_(body);
+      case "import": return usersImport_(body);
+      case "delete": return usersDelete_(body);
+      case "clear-session": return usersClearSession_(body);
+    }
+  } finally {
+    if (lock) lock.releaseLock();
+  }
+}
+
+function usersLogin_(body) {
+  var ten = usersClean_(body.ten);
+  var sessionId = usersClean_(body.sessionId);
+  var id = usersDocId_(ten);
+  if (!id || !sessionId) return { status: "error", message: "Thiếu tên hoặc sessionId." };
+  var nowIso = new Date().toISOString();
+  var d = usersGet_(id);
+
+  if (!d) {
+    // Khởi tạo lần đầu: nếu chưa có user nào, cho phép tài khoản quản trị tự tạo
+    // để còn vào được trang "Danh sách user" mà nhập danh sách.
+    if (usersIsAdmin_(ten)) {
+      var r = fsFetch_("/" + USERS_COLLECTION + "?pageSize=1", "get");
+      var empty = !(r.json && r.json.documents && r.json.documents.length);
+      if (empty) {
+        var fresh = { ten: "teamgv", team: "Quản trị", link: "", thoiGianTruyCap: nowIso, soLanTaoBai: 0, sessionId: "", lastActive: nowIso };
+        usersSet_(id, fresh);
+        return { status: "ok", found: true, bootstrap: true, user: usersPublic_(id, fresh) };
+      }
+    }
+    return { status: "ok", found: false };
+  }
+
+  if (usersIsAdmin_(d.ten)) {
+    usersUpdate_(id, { thoiGianTruyCap: nowIso, lastActive: nowIso });
+    d.thoiGianTruyCap = nowIso;
+    return { status: "ok", found: true, user: usersPublic_(id, d) };
+  }
+
+  if (d.sessionId && d.sessionId !== sessionId && usersAlive_(d, Date.now())) {
+    return { status: "ok", found: true, busy: true, lastActive: d.lastActive };
+  }
+  usersUpdate_(id, { sessionId: sessionId, lastActive: nowIso, thoiGianTruyCap: nowIso });
+  d.sessionId = sessionId;
+  d.lastActive = nowIso;
+  d.thoiGianTruyCap = nowIso;
+  return { status: "ok", found: true, user: usersPublic_(id, d) };
+}
+
+function usersHeartbeat_(body) {
+  var id = usersDocId_(body.ten);
+  var sessionId = usersClean_(body.sessionId);
+  if (!id) return { status: "error", message: "Thiếu tên." };
+  var d = usersGet_(id);
+  if (!d) return { status: "ok", kicked: true };
+  if (usersIsAdmin_(d.ten)) return { status: "ok", kicked: false };
+  if (d.sessionId !== sessionId) return { status: "ok", kicked: true };
+  usersUpdate_(id, { lastActive: new Date().toISOString() });
+  return { status: "ok", kicked: false };
+}
+
+function usersLogout_(body) {
+  var id = usersDocId_(body.ten);
+  var sessionId = usersClean_(body.sessionId);
+  if (!id) return { status: "error", message: "Thiếu tên." };
+  var d = usersGet_(id);
+  if (d && d.sessionId === sessionId) {
+    usersUpdate_(id, { sessionId: "", lastActive: new Date().toISOString() });
+  }
+  return { status: "ok" };
+}
+
+function usersLogTaoBai_(body) {
+  var id = usersDocId_(body.ten);
+  var sessionId = usersClean_(body.sessionId);
+  if (!id) return { status: "error", message: "Thiếu tên." };
+  var d = usersGet_(id);
+  if (!d) return { status: "error", message: "Không tìm thấy user." };
+  if (!usersIsAdmin_(d.ten) && d.sessionId !== sessionId) return { status: "ok", kicked: true };
+  var next = (Number(d.soLanTaoBai) || 0) + 1;
+  usersUpdate_(id, { soLanTaoBai: next, lastActive: new Date().toISOString() });
+  return { status: "ok", soLanTaoBai: next };
+}
+
+// ---------------- Quản trị ----------------
+
+function usersList_() {
+  var now = Date.now();
+  var users = usersListAll_()
+    .map(function (x) {
+      var u = usersPublic_(x.id, x.data);
+      u.online = usersAlive_(x.data, now);
+      return u;
+    })
+    .sort(function (a, b) { return a.ten.localeCompare(b.ten, "vi"); });
+  return { status: "ok", users: users };
+}
+
+function usersReadIncoming_(raw) {
+  var u = raw || {};
+  var out = { ten: usersClean_(u.ten), team: usersClean_(u.team), link: usersClean_(u.link) };
+  if (u.soLanTaoBai !== undefined && u.soLanTaoBai !== "" && isFinite(Number(u.soLanTaoBai))) {
+    out.soLanTaoBai = Math.max(0, Math.floor(Number(u.soLanTaoBai)));
+  }
+  return out;
+}
+
+function usersUpsert_(body) {
+  var incoming = usersReadIncoming_(body.user);
+  if (!incoming.ten) return { status: "error", message: "Tên user không được để trống." };
+  var newId = usersDocId_(incoming.ten);
+  if (!newId) return { status: "error", message: "Tên user không hợp lệ." };
+  var originalId = usersClean_(body.originalId);
+
+  var newDoc = usersGet_(newId);
+  var oldDoc = null;
+  if (originalId && originalId !== newId) {
+    oldDoc = usersGet_(originalId);
+    if (newDoc) return { status: "error", message: 'Đã có user khác trùng tên "' + incoming.ten + '".' };
+  } else if (!originalId && newDoc) {
+    return { status: "error", message: 'User "' + incoming.ten + '" đã tồn tại. Hãy dùng nút Sửa.' };
+  }
+  var base = oldDoc || newDoc || {};
+  var merged = {
+    ten: incoming.ten,
+    team: incoming.team,
+    link: incoming.link,
+    thoiGianTruyCap: base.thoiGianTruyCap || "",
+    soLanTaoBai: incoming.soLanTaoBai !== undefined ? incoming.soLanTaoBai : Number(base.soLanTaoBai) || 0,
+    sessionId: base.sessionId || "",
+    lastActive: base.lastActive || "",
+  };
+  var ops = [{ type: "set", id: newId, doc: merged }];
+  if (oldDoc) ops.push({ type: "delete", id: originalId });
+  usersCommit_(ops);
+  return { status: "ok", id: newId };
+}
+
+function usersImport_(body) {
+  var list = Array.isArray(body.users) ? body.users : [];
+  var mode = body.mode === "replace" ? "replace" : "merge";
+  if (!list.length) return { status: "error", message: "Danh sách nhập vào đang trống." };
+
+  // Gộp trùng tên trong chính file nhập (dòng sau ghi đè dòng trước)
+  var incomingById = {};
+  var order = [];
+  var skipped = 0;
+  list.forEach(function (raw) {
+    var u = usersReadIncoming_(raw);
+    var id = usersDocId_(u.ten);
+    if (!u.ten || !id) { skipped++; return; }
+    if (!incomingById[id]) order.push(id);
+    incomingById[id] = u;
+  });
+
+  var existing = {};
+  usersListAll_().forEach(function (x) { existing[x.id] = x.data; });
+
+  var ops = [];
+  var added = 0, updated = 0, removed = 0;
+  order.forEach(function (id) {
+    var u = incomingById[id];
+    var old = existing[id];
+    ops.push({
+      type: "set",
+      id: id,
+      doc: {
+        ten: u.ten,
+        team: u.team,
+        link: u.link,
+        thoiGianTruyCap: old ? old.thoiGianTruyCap || "" : "",
+        soLanTaoBai: u.soLanTaoBai !== undefined ? u.soLanTaoBai : old ? Number(old.soLanTaoBai) || 0 : 0,
+        sessionId: old ? old.sessionId || "" : "",
+        lastActive: old ? old.lastActive || "" : "",
+      },
+    });
+    if (old) updated++; else added++;
+  });
+  if (mode === "replace") {
+    Object.keys(existing).forEach(function (id) {
+      // Không bao giờ xoá tài khoản quản trị khi thay thế toàn bộ
+      if (!incomingById[id] && !usersIsAdmin_(existing[id].ten)) {
+        ops.push({ type: "delete", id: id });
+        removed++;
+      }
+    });
+  }
+  usersCommit_(ops);
+  return { status: "ok", added: added, updated: updated, removed: removed, skipped: skipped };
+}
+
+function usersDelete_(body) {
+  var ids = (Array.isArray(body.ids) ? body.ids : []).map(usersClean_).filter(Boolean);
+  if (!ids.length) return { status: "error", message: "Chưa chọn user cần xoá." };
+  var ops = [];
+  var protectedCount = 0;
+  ids.forEach(function (id) {
+    if (id === USERS_ADMIN_NAME) { protectedCount++; return; }
+    ops.push({ type: "delete", id: id });
+  });
+  if (ops.length) usersCommit_(ops);
+  return { status: "ok", deleted: ops.length, protected: protectedCount };
+}
+
+function usersClearSession_(body) {
+  var id = usersClean_(body.id);
+  if (!id) return { status: "error", message: "Thiếu id user." };
+  usersUpdate_(id, { sessionId: "", lastActive: "" });
+  return { status: "ok" };
 }
 
 // ---------------------------------------------------------------------------

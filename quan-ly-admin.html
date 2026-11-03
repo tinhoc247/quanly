@@ -1,6 +1,7 @@
 <!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"><title>Quản Lý Ngân Hàng Câu Hỏi — Ôn Luyện &amp; Kiểm Tra</title>
 
 <link rel="stylesheet" href="css/quan-ly-admin.css">
+<link rel="stylesheet" href="css/shell.css">
 </head><body class="admin-locked"><div id="loginOverlay" class="login-overlay"><div class="login-box"><h2>🔐 Đăng nhập quản trị</h2><p>Nhập đúng <b>họ và tên</b> của bạn (theo danh sách đã được cấp) để vào hệ thống quản lý ngân hàng câu hỏi. Hệ thống sẽ tự chọn đúng link nhận kết quả của bạn và ghi lại thời gian truy cập.</p><form id="loginForm"><input type="text" id="loginNameInput" placeholder="Nhập họ và tên..." autocomplete="off" autofocus><div id="loginStatus" class="login-status" style="display:none"></div><div id="loginError" class="login-error" style="display:none"></div><div class="login-actions"><button type="submit" id="loginSubmitBtn" class="btn btn-primary">✅ Vào hệ thống</button><button type="button" id="loginExitBtn" class="btn btn-danger">🚪 Thoát</button></div></form></div></div><div class="app"><div class="header"><div><h1>⚙️ Quản Lý Ngân Hàng Câu Hỏi</h1></div><div class="stat-row"><span class="stat-pill" id="statQuiz">0 câu hỏi</span><span class="stat-pill" id="statClass">0 học sinh</span><span class="stat-pill" id="statSchool">0 trường</span></div></div><div class="card" id="cardSchoolList"><h2>🏫 Danh sách học sinh &amp; trường</h2><p class="desc">
      Soạn danh sách từ file mẫu (nhấp vào xuất danh sách Excel), nhập nội dung theo cột, lưu rồi tải lên (Nhấp vào Nhập danh sách từ Excel)
     </p><div class="actions"><button class="btn btn-ghost" id="exportMergedListBtn">⬇️ Xuất danh sách ra Excel</button><label class="btn btn-ghost file-input-wrap">
@@ -102,4 +103,5 @@
 
 
 <script src="js/quan-ly-admin.js"></script>
+<script src="js/shell.js"></script>
 </body></html>
