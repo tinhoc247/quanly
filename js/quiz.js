@@ -3497,7 +3497,7 @@ function submitQuiz(force) {
     renderAttemptCount();
   }
   showResultScreen();
-  // (đã bỏ popup "Đã nộp bài": hiện thẳng màn hình kết quả)
+  if (QUIZ_MODE === "kiemtra") showResultPopup();
   if (passed) {
     fireConfetti(QUIZ_MODE === "kiemtra" ? resultTier.tier : "pass");
   }

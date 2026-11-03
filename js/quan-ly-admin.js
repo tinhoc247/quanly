@@ -2437,8 +2437,6 @@ async function deployToNetlify(htmlContent, fileName) {
   return json.url;
 }
 function showNetlifyLink(label, url) {
-  if (typeof window.recordLinkHistory === "function")
-    window.recordLinkHistory(label, url);
   const box = document.getElementById("netlifyLinkBox");
   const list = document.getElementById("netlifyLinkList");
   box.style.display = "block";
@@ -5147,7 +5145,6 @@ function fetchUserDirectory() {
             team: String(r.team || "").trim(),
             email: String(r.email || "").trim(),
             link: String(r.link || "").trim(),
-            raw: r,
           }))
           .filter((r) => r.ten);
         return USER_DIRECTORY;
@@ -5171,7 +5168,6 @@ function logUserAccess(ten) {
 }
 function logUserTaoBai(ten) {
   if (!ten) return;
-  window.dispatchEvent(new CustomEvent("ic3:taobai"));
   fetch(
     USER_DIRECTORY_URL +
       "?action=log-taobai&ten=" +
@@ -5351,7 +5347,6 @@ function unlockAdminApp(user) {
   applyRoleVisibility(user);
   applyDevToolsLock(user);
   startSessionHeartbeat(user);
-  window.dispatchEvent(new CustomEvent("ic3:login", { detail: user }));
 }
 async function handleLoginSubmit() {
   const input = document.getElementById("loginNameInput");

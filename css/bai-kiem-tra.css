@@ -415,3 +415,32 @@ html[data-theme=dark] body.pre-start .start-card { background: rgba(20, 27, 56, 
 .option.selected:not(.disabled):hover { background: var(--blue-pale) !important; }
 /* Chọn đáp án (vẽ lại cùng câu) không chạy lại hiệu ứng xuất hiện -> hết chớp */
 #mainCard.no-enter > *, #mainCard.no-enter .options .option { animation: none !important; }
+
+
+/* ===== Tiêu đề bài kiểm tra: dài thì xuống hàng, không che đồng hồ đếm giờ ===== */
+.header-left { flex: 1 1 0; min-width: 0; }
+.header-left > div:last-child { min-width: 0; overflow: visible; flex: 1 1 auto; }
+.header-title,
+.header-sub {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  display: block;
+}
+.header-sub { line-height: 1.35; }
+@media (min-width: 601px) {
+  /* Đồng hồ nằm trong dòng chảy (không còn căn giữa tuyệt đối đè lên chữ),
+     nên tiêu đề dài chỉ xuống hàng chứ không chạy dưới đồng hồ. */
+  .header { gap: 18px; }
+  .header-center {
+    position: static !important;
+    transform: none !important;
+    left: auto; top: auto;
+    flex: 0 0 auto !important;
+    min-width: 0;
+  }
+  .header-right { flex: 0 1 auto; max-width: 32%; }
+  .header-right #studentBadge { overflow-wrap: anywhere; text-align: right; }
+}

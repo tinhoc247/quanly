@@ -3318,7 +3318,7 @@ function finishQuiz(force) {
     renderAttemptCount();
   }
   showResultScreen();
-  // (đã bỏ popup "Đã nộp bài": hiện thẳng màn hình kết quả)
+  showResultPopup();
   if (passed) fireConfetti(resultTier.tier);
   sendResultToClassSheet(
     points,
@@ -3482,7 +3482,37 @@ function restartQuiz() {
     );
   }
   function clearClipboard() {
-    /* Không đụng tới clipboard: tránh trình duyệt hỏi quyền "xem nội dung clipboard". Lớp che đen là đủ. */
+    /* PrintScreen chỉ chép ảnh vào clipboard -> ghi đè clipboard bằng chữ ngay lập tức
+       (và lặp lại vài lần) để ảnh vừa chụp bị thay thế. Chỉ GHI, không đọc clipboard
+       nên trình duyệt không hỏi quyền. */
+    var junk = "🚫 Chụp màn hình không được phép.";
+    function legacy() {
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = junk;
+        ta.setAttribute("readonly", "");
+        ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch (_) {}
+    }
+    function once() {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(junk).catch(legacy);
+        } else {
+          legacy();
+        }
+      } catch (_) {
+        legacy();
+      }
+    }
+    once();
+    [60, 200, 500, 1200].forEach(function (ms) {
+      setTimeout(once, ms);
+    });
   }
   function showCover(holdMs) {
     cover.style.display = "flex";
@@ -3513,7 +3543,7 @@ function restartQuiz() {
         showCover(2500);
         clearClipboard();
         if (k === "s") warn();
-      } else if (k === "printscreen" || e.keyCode === 44) {
+      } else if (k === "printscreen" || e.code === "PrintScreen" || e.keyCode === 44) {
         e.preventDefault();
         showCover(2500);
         clearClipboard();
@@ -3528,7 +3558,7 @@ function restartQuiz() {
       var k = (e.key || "").toLowerCase();
       if (k === "meta" || k === "os") metaDown = false;
       if (k === "shift") shiftDown = false;
-      if (k === "printscreen" || e.keyCode === 44) {
+      if (k === "printscreen" || e.code === "PrintScreen" || e.keyCode === 44) {
         clearClipboard();
         if (examActive()) showCover(2500);
       } else if (cover.style.display === "flex" && !(metaDown && shiftDown)) {
