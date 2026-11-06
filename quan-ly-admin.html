@@ -1,7 +1,7 @@
 <!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"><title>Quản Lý Ngân Hàng Câu Hỏi — Ôn Luyện &amp; Kiểm Tra</title>
 
 <link rel="stylesheet" href="css/quan-ly-admin.css">
-</head><body class="admin-locked"><div id="loginOverlay" class="login-overlay"><div class="login-box"><h2>🔐 Đăng nhập quản trị</h2><p>Nhập đúng <b>họ và tên</b> của bạn (theo danh sách đã được cấp) để vào hệ thống quản lý ngân hàng câu hỏi. Hệ thống sẽ tự chọn đúng link nhận kết quả của bạn và ghi lại thời gian truy cập.</p><form id="loginForm"><input type="text" id="loginNameInput" placeholder="Nhập họ và tên..." autocomplete="off" autofocus><div id="loginStatus" class="login-status" style="display:none"></div><div id="loginError" class="login-error" style="display:none"></div><div class="login-actions"><button type="submit" id="loginSubmitBtn" class="btn btn-primary">✅ Vào hệ thống</button><button type="button" id="loginExitBtn" class="btn btn-danger">🚪 Thoát</button></div></form></div></div><nav id="sideNav" class="side-nav" aria-label="Điều hướng quản trị"><div class="side-nav-brand"><span class="side-nav-logo">⚙️</span><span>Quản trị IC3</span></div><div class="side-nav-section">Thiết lập &amp; tạo đề</div><a href="#cardWorking" data-target="cardWorking"><span class="ni">📖</span><span>Chọn cấp độ</span></a><a href="#cardChooseHost" data-target="cardChooseHost"><span class="ni">🌐</span><span>Chọn Host</span></a><a href="#cardCreateSet" data-target="cardCreateSet"><span class="ni">🎓</span><span>Tạo bộ đề</span></a><a href="#cardSchoolList" data-target="cardSchoolList"><span class="ni">🏫</span><span>Học sinh &amp; trường</span></a><div class="side-nav-section">Dữ liệu</div><a href="#cardResults" data-target="cardResults"><span class="ni">📊</span><span>Kết quả bài làm</span></a><a href="#cardQuestionImages" data-target="cardQuestionImages"><span class="ni">🖼️</span><span>Ảnh câu hỏi</span></a><a href="#cardQuestionBank" data-target="cardQuestionBank"><span class="ni">🗂️</span><span>Ngân hàng câu hỏi</span></a><a href="#cardQuestionEditor" data-target="cardQuestionEditor"><span class="ni">✏️</span><span>Sửa câu hỏi</span></a><div class="side-nav-section">Hệ thống</div><a href="#cardClearData" data-target="cardClearData"><span class="ni">🗑️</span><span>Xoá dữ liệu tạm</span></a></nav><div class="app"><div class="header"><div><h1>⚙️ Quản Lý Ngân Hàng Câu Hỏi</h1></div><div class="stat-row"><span class="stat-pill" id="statQuiz">0 câu hỏi</span><span class="stat-pill" id="statClass">0 học sinh</span><span class="stat-pill" id="statSchool">0 trường</span></div></div><div class="card" id="cardSchoolList"><h2>🏫 Danh sách học sinh &amp; trường</h2><p class="desc">
+</head><body class="admin-locked"><div id="loginOverlay" class="login-overlay"><div class="login-box"><h2>🔐 Đăng nhập quản trị</h2><p>Nhập đúng <b>họ và tên</b> của bạn (theo danh sách đã được cấp) để vào hệ thống quản lý ngân hàng câu hỏi. Hệ thống sẽ tự chọn đúng link nhận kết quả của bạn và ghi lại thời gian truy cập.</p><form id="loginForm"><input type="text" id="loginNameInput" placeholder="Nhập họ và tên..." autocomplete="off" autofocus><div id="loginStatus" class="login-status" style="display:none"></div><div id="loginError" class="login-error" style="display:none"></div><div class="login-actions"><button type="submit" id="loginSubmitBtn" class="btn btn-primary">✅ Vào hệ thống</button><button type="button" id="loginExitBtn" class="btn btn-danger">🚪 Thoát</button></div></form></div></div><nav id="sideNav" class="side-nav" aria-label="Điều hướng quản trị"><div class="side-nav-brand"><span class="side-nav-logo">⚙️</span><span>Quản trị IC3</span></div><div class="side-nav-section">Thiết lập &amp; tạo đề</div><a href="#cardWorking" data-target="cardWorking"><span class="ni">📖</span><span>Chọn cấp độ</span></a><a href="#cardChooseHost" data-target="cardChooseHost"><span class="ni">🌐</span><span>Chọn Host</span></a><a href="#cardCreateSet" data-target="cardCreateSet"><span class="ni">🎓</span><span>Tạo bộ đề</span></a><a href="#cardSchoolList" data-target="cardSchoolList"><span class="ni">🏫</span><span>Học sinh &amp; trường</span></a><div class="side-nav-section">Dữ liệu</div><a href="#cardResults" data-target="cardResults"><span class="ni">📊</span><span>Kết quả bài làm</span></a><a href="#cardQuestionImages" data-target="cardQuestionImages"><span class="ni">🖼️</span><span>Ảnh câu hỏi</span></a><a href="#cardQuestionBank" data-target="cardQuestionBank"><span class="ni">🗂️</span><span>Ngân hàng câu hỏi</span></a><a href="#cardQuestionEditor" data-target="cardQuestionEditor"><span class="ni">✏️</span><span>Sửa câu hỏi</span></a><div class="side-nav-section">Hệ thống</div><a href="#cardClearData" data-target="cardClearData"><span class="ni">🗑️</span><span>Xoá dữ liệu tạm</span></a><div class="side-nav-footer"><div id="sideNavUser" class="side-nav-user"></div><button type="button" id="logoutBtn" class="side-nav-logout"><span class="ni">🚪</span><span>Đăng xuất</span></button></div></nav><div class="app"><div class="header"><div><h1>⚙️ Quản Lý Ngân Hàng Câu Hỏi</h1></div><div class="stat-row"><span class="stat-pill" id="statQuiz">0 câu hỏi</span><span class="stat-pill" id="statClass">0 học sinh</span><span class="stat-pill" id="statSchool">0 trường</span></div></div><div class="card" id="cardSchoolList"><h2>🏫 Danh sách học sinh &amp; trường</h2><p class="desc">
      Soạn danh sách từ file mẫu (nhấp vào xuất danh sách Excel), nhập nội dung theo cột, lưu rồi tải lên (Nhấp vào Nhập danh sách từ Excel)
     </p><div class="actions"><button class="btn btn-ghost" id="exportMergedListBtn">⬇️ Xuất danh sách ra Excel</button><label class="btn btn-ghost file-input-wrap">
         ⬆️ Nhập danh sách từ Excel
@@ -17,7 +17,7 @@
       </label><label style="display:flex;align-items:center;gap:7px;font-size:14px;font-weight:600;cursor:pointer;"><input type="radio" name="createType" id="createTypeKiemtra" value="kiemtra">
         📝 Bài KIỂM TRA
       </label></div><div id="examDurationRow" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;"><label for="examDurationInput" style="font-size:13.5px;color:var(--text-mute);">⏱️ Thời gian làm bài (phút):</label><input type="number" id="examDurationInput" min="1" value="50"
-        style="width:120px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;"><span class="hint" style="margin:0;">Chỉ áp dụng cho bài KIỂM TRA (bài ôn luyện không giới hạn thời gian).</span></div><div id="resultRecipientNotice" style="display:none;"></div><div class="download-row"><button class="btn btn-primary btn-lg" id="downloadBtn">🚀 Tạo bộ đề</button></div><div id="downloadLog" class="log"></div><div id="netlifyLinkBox" style="display:none;margin-top:10px;padding:12px 14px;background:#eef7ff;border:1px solid #bfe0ff;border-radius:8px;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><div style="font-weight:600;flex:1;min-width:220px;">🔗 Nhật ký link đã tạo <span id="linkHistoryCount" style="color:#1f4fc4;"></span><div style="font-weight:400;font-size:12px;color:#666;margin-top:2px;">Lưu trong bộ nhớ trình duyệt này (localStorage) — đóng/mở lại trang vẫn còn, không đồng bộ sang máy khác.</div></div><button type="button" class="btn btn-ghost" id="exportLinkHistoryBtn" style="padding:6px 12px;">⬇️ Xuất CSV</button><button type="button" class="btn btn-danger" id="clearLinkHistoryBtn" style="padding:6px 12px;">🗑️ Xoá nhật ký</button></div><div id="netlifyLinkList" style="display:flex;flex-direction:column;gap:6px;"></div></div><div class="hint">
+        style="width:120px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;"><span class="hint" style="margin:0;">Chỉ áp dụng cho bài KIỂM TRA (bài ôn luyện không giới hạn thời gian).</span></div><div id="resultRecipientNotice" style="display:none;"></div><div class="download-row"><button class="btn btn-primary btn-lg" id="downloadBtn">🚀 Tạo bộ đề</button></div><div id="downloadLog" class="log"></div><div id="netlifyLinkBox" style="display:none;margin-top:10px;padding:12px 14px;background:#eef7ff;border:1px solid #bfe0ff;border-radius:8px;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><div style="font-weight:600;flex:1;min-width:220px;">🔗 Nhật ký link đã tạo <span id="linkHistoryCount" style="color:#1f4fc4;"></span><div style="font-weight:400;font-size:12px;color:#666;margin-top:2px;">Ghi riêng theo từng tài khoản, lưu trong trình duyệt này (localStorage), tự giữ tối đa 100 link mới nhất mỗi tài khoản — đóng/mở lại trang vẫn còn, không đồng bộ sang máy khác.</div></div><select id="linkHistoryUserFilter" class="select-input" style="display:none;width:auto;max-width:220px;padding:6px 10px;font-size:13px;" title="Lọc theo tài khoản (chỉ teamgv)"></select><button type="button" class="btn btn-ghost" id="exportLinkHistoryBtn" style="padding:6px 12px;">⬇️ Xuất CSV</button><button type="button" class="btn btn-danger" id="clearLinkHistoryBtn" style="padding:6px 12px;">🗑️ Xoá nhật ký</button></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 6px;"><label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;cursor:pointer;"><input type="checkbox" id="linkHistorySelectAll" style="width:17px;height:17px;cursor:pointer;"> Chọn tất cả</label><button type="button" class="btn btn-danger" id="deleteSelectedLinksBtn" style="padding:5px 12px;font-size:13px;" disabled>🗑️ Xoá đã chọn</button><select id="pruneLinksSelect" class="select-input" style="width:auto;max-width:230px;padding:5px 10px;font-size:13px;" title="Xoá nhanh các link đã cũ"><option value="">🧹 Dọn link cũ…</option><option value="7">Cũ hơn 7 ngày</option><option value="30">Cũ hơn 30 ngày</option><option value="90">Cũ hơn 90 ngày</option></select></div><div id="netlifyLinkList" style="display:flex;flex-direction:column;gap:6px;max-height:420px;overflow-y:auto;padding-right:4px;"></div></div><div class="hint">
       Bài ôn luyện: không giới hạn thời gian, cho xem đáp án ngay. Bài kiểm tra: có đồng hồ đếm giờ,
       tính điểm.
     </div></div><div class="card" id="cardResults" style="display:none" data-role="teamgv-only"><h2>📊 Kết quả bài làm</h2><p class="desc">
@@ -108,56 +108,66 @@
   if (!nav) return;
   var links = Array.prototype.slice.call(nav.querySelectorAll("a[data-target]"));
   var sections = Array.prototype.slice.call(nav.querySelectorAll(".side-nav-section"));
+  var DEFAULT_PAGE = "cardWorking";
+  var current = null;
+  var userChose = false;
+  var wanted = (location.hash || "").replace("#", "");
   function card(id) { return document.getElementById(id); }
-  function visible(el) { return !!el && el.offsetParent !== null; }
-  function sync() {
+  // Thẻ "được phép" = không bị JS phân quyền ẩn bằng style inline
+  function allowed(id) { var el = card(id); return !!el && el.style.display !== "none"; }
+  function firstAllowed() {
+    for (var i = 0; i < links.length; i++) if (allowed(links[i].dataset.target)) return links[i].dataset.target;
+    return null;
+  }
+  function setPage(id, fromUser) {
+    if (!allowed(id)) id = firstAllowed();
+    if (!id) return;
+    if (fromUser) userChose = true;
+    current = id;
+    links.forEach(function (a) { a.classList.toggle("active", a.dataset.target === id); });
     links.forEach(function (a) {
-      a.style.display = visible(card(a.dataset.target)) ? "" : "none";
+      var c = card(a.dataset.target);
+      if (c) c.classList.toggle("page-active", a.dataset.target === id);
     });
+    document.body.setAttribute("data-page", id);
+    try { history.replaceState(null, "", "#" + id); } catch (e) {}
+    window.scrollTo(0, 0);
+    var act = nav.querySelector("a.active");
+    if (act && window.matchMedia("(max-width:1100px)").matches) {
+      nav.scrollTo({ left: act.offsetLeft - nav.clientWidth / 2 + act.offsetWidth / 2, behavior: "auto" });
+    }
+  }
+  function sync() {
+    links.forEach(function (a) { a.style.display = allowed(a.dataset.target) ? "" : "none"; });
     sections.forEach(function (sec) {
       var n = sec.nextElementSibling, any = false;
-      while (n && !n.classList.contains("side-nav-section")) {
+      while (n && !n.classList.contains("side-nav-section") && !n.classList.contains("side-nav-footer")) {
         if (n.style.display !== "none") any = true;
         n = n.nextElementSibling;
       }
       sec.style.display = any ? "" : "none";
     });
-    spy();
-  }
-  function spy() {
-    var cur = null, best = -1e9;
-    links.forEach(function (a) {
-      var el = card(a.dataset.target);
-      if (!visible(el)) return;
-      var top = el.getBoundingClientRect().top;
-      if (top <= 140 && top > best) { best = top; cur = a; }
-    });
-    if (!cur) cur = links.filter(function (a) { return visible(card(a.dataset.target)); })[0];
-    links.forEach(function (a) { a.classList.toggle("active", a === cur); });
-    if (cur && window.matchMedia("(max-width:1100px)").matches) {
-      var l = cur.offsetLeft - nav.clientWidth / 2 + cur.offsetWidth / 2;
-      nav.scrollTo({ left: l, behavior: "auto" });
-    }
+    var target = current;
+    if (!userChose && wanted && allowed(wanted)) target = wanted;
+    if (!target || !allowed(target)) target = firstAllowed() || DEFAULT_PAGE;
+    if (target !== current || !document.querySelector(".app > .card.page-active")) setPage(target, false);
   }
   links.forEach(function (a) {
     a.addEventListener("click", function (e) {
       e.preventDefault();
-      var el = card(a.dataset.target);
-      if (!el) return;
-      if (el.classList.contains("collapsed")) {
-        var h = el.querySelector("h2");
-        if (h) h.click();
-      }
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      setPage(a.dataset.target, true);
     });
+  });
+  window.addEventListener("hashchange", function () {
+    var id = (location.hash || "").replace("#", "");
+    if (id && id !== current && allowed(id)) setPage(id, true);
   });
   var app = document.querySelector(".app");
   if (app && window.MutationObserver) {
     new MutationObserver(function () { sync(); }).observe(app, {
-      attributes: true, attributeFilter: ["style", "class"], subtree: true
+      attributes: true, attributeFilter: ["style"], subtree: true
     });
   }
-  window.addEventListener("scroll", spy, { passive: true });
   window.addEventListener("resize", sync);
   sync();
 })();

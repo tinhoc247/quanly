@@ -2438,7 +2438,9 @@ async function deployToNetlify(htmlContent, fileName) {
 }
 // ===== Nhật ký link đã tạo — lưu trong localStorage của trình duyệt =====
 const LINK_HISTORY_KEY = "ic3_admin_link_history_v1";
-const LINK_HISTORY_MAX = 300;
+const LINK_HISTORY_MAX = 1000; // trần chung
+const LINK_HISTORY_PER_USER = 100; // mỗi tài khoản giữ tối đa N link mới nhất
+const LINK_SELECTED = new Set(); // id các dòng đang được tick
 function loadLinkHistory() {
   try {
     const arr = JSON.parse(localStorage.getItem(LINK_HISTORY_KEY) || "[]");
@@ -2457,6 +2459,52 @@ function saveLinkHistory(arr) {
   } catch (e) {
     return false;
   }
+}
+let LINK_HISTORY_FILTER = ""; // chỉ dùng cho teamgv: "" = tất cả, hoặc khoá tên 1 user
+function linkEntryKey(it) {
+  return normalizeNameForCompare(String((it && (it.adminKey || it.admin)) || ""));
+}
+// Danh sách nhật ký mà tài khoản đang đăng nhập được xem
+function visibleLinkHistory() {
+  const user = CURRENT_ADMIN_USER;
+  if (!user) return [];
+  const all = loadLinkHistory();
+  if (isTeamGVUser(user)) {
+    return LINK_HISTORY_FILTER
+      ? all.filter((it) => linkEntryKey(it) === LINK_HISTORY_FILTER)
+      : all;
+  }
+  const me = normalizeNameForCompare(user.ten);
+  return all.filter((it) => linkEntryKey(it) === me);
+}
+function refreshLinkUserFilter() {
+  const sel = document.getElementById("linkHistoryUserFilter");
+  if (!sel) return;
+  const isAdmin = !!CURRENT_ADMIN_USER && isTeamGVUser(CURRENT_ADMIN_USER);
+  sel.style.display = isAdmin ? "" : "none";
+  if (!isAdmin) return;
+  const names = new Map();
+  loadLinkHistory().forEach((it) => {
+    const k = linkEntryKey(it);
+    if (!names.has(k)) names.set(k, it.admin || "(không rõ tên)");
+  });
+  sel.innerHTML = "";
+  const optAll = document.createElement("option");
+  optAll.value = "";
+  optAll.textContent = "👥 Tất cả tài khoản";
+  sel.appendChild(optAll);
+  names.forEach((label, k) => {
+    const o = document.createElement("option");
+    o.value = k;
+    o.textContent = "👤 " + label;
+    sel.appendChild(o);
+  });
+  if (LINK_HISTORY_FILTER && !names.has(LINK_HISTORY_FILTER)) LINK_HISTORY_FILTER = "";
+  sel.value = LINK_HISTORY_FILTER;
+  sel.onchange = () => {
+    LINK_HISTORY_FILTER = sel.value;
+    renderLinkHistory();
+  };
 }
 function fmtLinkTime(ms) {
   const d = new Date(ms);
@@ -2487,7 +2535,8 @@ function renderLinkHistory() {
   const list = document.getElementById("netlifyLinkList");
   const countEl = document.getElementById("linkHistoryCount");
   if (!box || !list) return;
-  const items = loadLinkHistory();
+  refreshLinkUserFilter();
+  const items = visibleLinkHistory();
   list.innerHTML = "";
   if (countEl) countEl.textContent = items.length ? "(" + items.length + ")" : "";
   if (!items.length) {
@@ -2499,6 +2548,17 @@ function renderLinkHistory() {
     const row = document.createElement("div");
     row.style.cssText =
       "display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:7px 0;border-bottom:1px dashed #cfe3fa;";
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.className = "linkhist-check";
+    chk.style.cssText = "width:17px;height:17px;cursor:pointer;flex:none;";
+    chk.checked = LINK_SELECTED.has(it.id);
+    chk.onchange = () => {
+      if (chk.checked) LINK_SELECTED.add(it.id);
+      else LINK_SELECTED.delete(it.id);
+      updateLinkSelectionUi();
+    };
+    row.appendChild(chk);
     const meta = document.createElement("div");
     meta.style.cssText = "font-size:12px;color:#666;min-width:150px;line-height:1.5;";
     const line1 = document.createElement("div");
@@ -2539,6 +2599,7 @@ function renderLinkHistory() {
     del.textContent = "✖";
     del.onclick = () => {
       saveLinkHistory(loadLinkHistory().filter((x) => x.id !== it.id));
+      LINK_SELECTED.delete(it.id);
       renderLinkHistory();
     };
     row.appendChild(meta);
@@ -2547,17 +2608,62 @@ function renderLinkHistory() {
     row.appendChild(del);
     list.appendChild(row);
   });
+  updateLinkSelectionUi();
+}
+function updateLinkSelectionUi() {
+  const shown = new Set(visibleLinkHistory().map((x) => x.id));
+  Array.from(LINK_SELECTED).forEach((id) => {
+    if (!shown.has(id)) LINK_SELECTED.delete(id);
+  });
+  const n = LINK_SELECTED.size;
+  const btn = document.getElementById("deleteSelectedLinksBtn");
+  if (btn) {
+    btn.disabled = n === 0;
+    btn.textContent = n ? "🗑️ Xoá đã chọn (" + n + ")" : "🗑️ Xoá đã chọn";
+  }
+  const all = document.getElementById("linkHistorySelectAll");
+  if (all) {
+    all.checked = shown.size > 0 && n === shown.size;
+    all.indeterminate = n > 0 && n < shown.size;
+  }
+}
+function deleteSelectedLinks() {
+  const n = LINK_SELECTED.size;
+  if (!n) return;
+  if (!confirm("Xoá " + n + " dòng nhật ký đã chọn?")) return;
+  const ids = new Set(LINK_SELECTED);
+  saveLinkHistory(loadLinkHistory().filter((x) => !ids.has(x.id)));
+  LINK_SELECTED.clear();
+  renderLinkHistory();
+}
+function pruneOldLinks(days) {
+  days = Number(days);
+  if (!days) return;
+  const cutoff = Date.now() - days * 24 * 3600 * 1000;
+  const old = visibleLinkHistory().filter((x) => x.t < cutoff);
+  if (!old.length) {
+    setLog("downloadLog", "info", "Không có link nào cũ hơn " + days + " ngày.");
+    return;
+  }
+  if (!confirm("Xoá " + old.length + " link cũ hơn " + days + " ngày?")) return;
+  const ids = new Set(old.map((x) => x.id));
+  saveLinkHistory(loadLinkHistory().filter((x) => !ids.has(x.id)));
+  renderLinkHistory();
+  setLog("downloadLog", "ok", "Đã xoá " + old.length + " link cũ hơn " + days + " ngày khỏi nhật ký.");
 }
 function clearLinkHistory() {
-  if (!loadLinkHistory().length) return;
-  if (!confirm("Xoá toàn bộ nhật ký link đã tạo trên trình duyệt này?")) return;
-  try {
-    localStorage.removeItem(LINK_HISTORY_KEY);
-  } catch (e) {}
+  const mine = visibleLinkHistory();
+  if (!mine.length) return;
+  const isAdmin = CURRENT_ADMIN_USER && isTeamGVUser(CURRENT_ADMIN_USER);
+  const who = isAdmin && !LINK_HISTORY_FILTER ? "của TẤT CẢ tài khoản" : "của tài khoản này";
+  if (!confirm("Xoá " + mine.length + " dòng nhật ký link " + who + " trên trình duyệt này?")) return;
+  const ids = new Set(mine.map((x) => x.id));
+  saveLinkHistory(loadLinkHistory().filter((x) => !ids.has(x.id)));
+  LINK_SELECTED.clear();
   renderLinkHistory();
 }
 function exportLinkHistoryCsv() {
-  const items = loadLinkHistory();
+  const items = visibleLinkHistory();
   if (!items.length) return;
   const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
   const rows = [["Thời gian", "Loại", "Cấp độ", "Tên bộ", "Số câu", "Người tạo", "Link"]];
@@ -2596,9 +2702,21 @@ function showNetlifyLink(label, url, extra) {
     count: extra.count || 0,
     host: extra.host || "",
     admin: extra.admin || "",
+    adminKey: normalizeNameForCompare(extra.admin || ""),
   };
   const items = loadLinkHistory();
   items.unshift(entry);
+  {
+    const counts = {};
+    const kept = [];
+    items.forEach((it) => {
+      const k = linkEntryKey(it);
+      counts[k] = (counts[k] || 0) + 1;
+      if (counts[k] <= LINK_HISTORY_PER_USER) kept.push(it);
+    });
+    items.length = 0;
+    kept.forEach((x) => items.push(x));
+  }
   if (!saveLinkHistory(items))
     setLog(
       "downloadLog",
@@ -5487,6 +5605,15 @@ function unlockAdminApp(user) {
       (isTeamGVUser(user) ? " · 👑 Toàn quyền" : "");
     headerEl.appendChild(badge);
   }
+  const sideUser = document.getElementById("sideNavUser");
+  if (sideUser)
+    sideUser.textContent =
+      "👤 " +
+      user.ten +
+      (user.team ? " · " + user.team : "") +
+      (isTeamGVUser(user) ? " · 👑" : "");
+  LINK_HISTORY_FILTER = "";
+  renderLinkHistory();
   logUserAccess(user.ten);
   applyLoggedInUserToEmailList(user);
   renderResultRecipientNotice();
@@ -5617,5 +5744,59 @@ try {
   const exportBtn = document.getElementById("exportLinkHistoryBtn");
   if (clearBtn) clearBtn.onclick = clearLinkHistory;
   if (exportBtn) exportBtn.onclick = exportLinkHistoryCsv;
+  const delSel = document.getElementById("deleteSelectedLinksBtn");
+  if (delSel) delSel.onclick = deleteSelectedLinks;
+  const selAll = document.getElementById("linkHistorySelectAll");
+  if (selAll)
+    selAll.onchange = () => {
+      const ids = visibleLinkHistory().map((x) => x.id);
+      LINK_SELECTED.clear();
+      if (selAll.checked) ids.forEach((id) => LINK_SELECTED.add(id));
+      renderLinkHistory();
+    };
+  const pruneSel = document.getElementById("pruneLinksSelect");
+  if (pruneSel)
+    pruneSel.onchange = () => {
+      const v = pruneSel.value;
+      pruneSel.value = "";
+      if (v) pruneOldLinks(v);
+    };
   renderLinkHistory();
+} catch (e) {}
+
+// ===== Đăng xuất: giải phóng phiên rồi quay lại màn hình đăng nhập =====
+async function logoutAdmin() {
+  const user = CURRENT_ADMIN_USER;
+  if (!user) {
+    location.reload();
+    return;
+  }
+  if (!confirm('Đăng xuất khỏi tài khoản "' + user.ten + '"?')) return;
+  const btn = document.getElementById("logoutBtn");
+  if (btn) btn.disabled = true;
+  stopSessionHeartbeat();
+  if (!isTeamGVUser(user)) {
+    try {
+      await Promise.race([
+        fetch(
+          USER_DIRECTORY_URL +
+            "?action=logout&ten=" +
+            encodeURIComponent(user.ten) +
+            "&sessionId=" +
+            encodeURIComponent(APP_SESSION_ID),
+        ).catch(() => {}),
+        new Promise((r) => setTimeout(r, 3000)),
+      ]);
+    } catch (err) {}
+  }
+  CURRENT_ADMIN_USER = null;
+  window.removeEventListener("beforeunload", releaseSessionOnUnload);
+  try {
+    history.replaceState(null, "", location.pathname + location.search);
+  } catch (err) {}
+  location.reload();
+}
+try {
+  const logoutBtnEl = document.getElementById("logoutBtn");
+  if (logoutBtnEl) logoutBtnEl.addEventListener("click", logoutAdmin);
 } catch (e) {}
