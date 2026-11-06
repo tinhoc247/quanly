@@ -2436,36 +2436,176 @@ async function deployToNetlify(htmlContent, fileName) {
   });
   return json.url;
 }
-function showNetlifyLink(label, url) {
+// ===== Nhật ký link đã tạo — lưu trong localStorage của trình duyệt =====
+const LINK_HISTORY_KEY = "ic3_admin_link_history_v1";
+const LINK_HISTORY_MAX = 300;
+function loadLinkHistory() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(LINK_HISTORY_KEY) || "[]");
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+function saveLinkHistory(arr) {
+  try {
+    localStorage.setItem(
+      LINK_HISTORY_KEY,
+      JSON.stringify(arr.slice(0, LINK_HISTORY_MAX)),
+    );
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+function fmtLinkTime(ms) {
+  const d = new Date(ms);
+  return (
+    d.toLocaleDateString("vi-VN") +
+    " " +
+    d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+function copyLinkText(text) {
+  const done = () => setLog("downloadLog", "ok", "Đã copy link vào clipboard.");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done);
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      done();
+    } catch (e) {}
+    ta.remove();
+  }
+}
+function renderLinkHistory() {
   const box = document.getElementById("netlifyLinkBox");
   const list = document.getElementById("netlifyLinkList");
+  const countEl = document.getElementById("linkHistoryCount");
+  if (!box || !list) return;
+  const items = loadLinkHistory();
+  list.innerHTML = "";
+  if (countEl) countEl.textContent = items.length ? "(" + items.length + ")" : "";
+  if (!items.length) {
+    box.style.display = "none";
+    return;
+  }
   box.style.display = "block";
-  const time = new Date().toLocaleTimeString("vi-VN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
+  items.forEach((it) => {
+    const row = document.createElement("div");
+    row.style.cssText =
+      "display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:7px 0;border-bottom:1px dashed #cfe3fa;";
+    const meta = document.createElement("div");
+    meta.style.cssText = "font-size:12px;color:#666;min-width:150px;line-height:1.5;";
+    const line1 = document.createElement("div");
+    line1.textContent = fmtLinkTime(it.t);
+    const line2 = document.createElement("div");
+    line2.style.cssText = "color:#1f4fc4;font-weight:700;";
+    line2.textContent = [
+      it.mode === "kiemtra" ? "📝 Kiểm tra" : it.mode === "onluyen" ? "🧩 Ôn luyện" : "",
+      it.subject || "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    meta.appendChild(line1);
+    if (line2.textContent) meta.appendChild(line2);
+    const sub = document.createElement("div");
+    sub.textContent =
+      String(it.label || "").replace(/:$/, "") +
+      (it.count ? " · " + it.count + " câu" : "") +
+      (it.admin ? " · " + it.admin : "");
+    meta.appendChild(sub);
+    const a = document.createElement("a");
+    a.href = it.url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.style.cssText = "word-break:break-all;color:#1a73e8;flex:1;min-width:200px;";
+    a.textContent = it.url;
+    const cp = document.createElement("button");
+    cp.type = "button";
+    cp.className = "btn netlify-copy";
+    cp.style.padding = "4px 10px";
+    cp.textContent = "📋 Copy";
+    cp.onclick = () => copyLinkText(it.url);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn btn-ghost";
+    del.style.padding = "4px 10px";
+    del.title = "Xoá dòng này khỏi nhật ký";
+    del.textContent = "✖";
+    del.onclick = () => {
+      saveLinkHistory(loadLinkHistory().filter((x) => x.id !== it.id));
+      renderLinkHistory();
+    };
+    row.appendChild(meta);
+    row.appendChild(a);
+    row.appendChild(cp);
+    row.appendChild(del);
+    list.appendChild(row);
   });
-  const row = document.createElement("div");
-  row.style.cssText =
-    "display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;border-bottom:1px dashed #cfe3fa;";
-  row.innerHTML =
-    '<span style="font-size:12px;color:#666;min-width:120px;">' +
-    time +
-    " — " +
-    label +
-    "</span>" +
-    '<a href="' +
-    url +
-    '" target="_blank" style="word-break:break-all;color:#1a73e8;flex:1;">' +
-    url +
-    "</a>" +
-    '<button type="button" class="btn netlify-copy" style="padding:4px 10px;">📋 Copy</button>';
-  row.querySelector(".netlify-copy").onclick = () => {
-    navigator.clipboard.writeText(url).then(() => {
-      setLog("downloadLog", "ok", "Đã copy link vào clipboard.");
-    });
+}
+function clearLinkHistory() {
+  if (!loadLinkHistory().length) return;
+  if (!confirm("Xoá toàn bộ nhật ký link đã tạo trên trình duyệt này?")) return;
+  try {
+    localStorage.removeItem(LINK_HISTORY_KEY);
+  } catch (e) {}
+  renderLinkHistory();
+}
+function exportLinkHistoryCsv() {
+  const items = loadLinkHistory();
+  if (!items.length) return;
+  const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+  const rows = [["Thời gian", "Loại", "Cấp độ", "Tên bộ", "Số câu", "Người tạo", "Link"]];
+  items.forEach((it) =>
+    rows.push([
+      fmtLinkTime(it.t),
+      it.mode === "kiemtra" ? "Kiểm tra" : it.mode === "onluyen" ? "Ôn luyện" : "",
+      it.subject || "",
+      String(it.label || "").replace(/:$/, ""),
+      it.count || "",
+      it.admin || "",
+      it.url,
+    ]),
+  );
+  const csv = "\ufeff" + rows.map((r) => r.map(esc).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "nhat-ky-link-" + new Date().toISOString().slice(0, 10) + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(a.href);
+    a.remove();
+  }, 500);
+}
+function showNetlifyLink(label, url, extra) {
+  extra = extra || {};
+  const entry = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    t: Date.now(),
+    label: label,
+    url: url,
+    mode: extra.mode || "",
+    subject: extra.subject || "",
+    count: extra.count || 0,
+    host: extra.host || "",
+    admin: extra.admin || "",
   };
-  list.prepend(row);
+  const items = loadLinkHistory();
+  items.unshift(entry);
+  if (!saveLinkHistory(items))
+    setLog(
+      "downloadLog",
+      "info",
+      "⚠️ Không lưu được nhật ký link vào bộ nhớ trình duyệt (có thể đã đầy hoặc bị chặn).",
+    );
+  renderLinkHistory();
 }
 // Nguồn khuôn mẫu cho từng mode — không còn dùng 1 blob tplUnifiedB64 nhúng sẵn (đã lệch
 // hẳn so với js/quiz.js và js/bai-kiem-tra.js thật, vì 2 file giờ đã tách riêng chứ không
@@ -2593,7 +2733,13 @@ async function generateAndDeploySets(mode, baseFilename, labelPrefix) {
       "ok",
       `Đã tạo "${filename}"${setLabel} với ${quizForSet.length} câu hỏi và đã đẩy lên GitHub.`,
     );
-    showNetlifyLink(`${labelPrefix}${setLabel}:`, link);
+    showNetlifyLink(`${labelPrefix}${setLabel}:`, link, {
+      mode: mode,
+      subject: subjectLabel(ACTIVE_SUBJECT),
+      count: quizForSet.length,
+      host: ACTIVE_HOST_ID,
+      admin: CURRENT_ADMIN_USER ? CURRENT_ADMIN_USER.ten : "",
+    });
   }
   if (CURRENT_ADMIN_USER) logUserTaoBai(CURRENT_ADMIN_USER.ten);
 }
@@ -5464,3 +5610,12 @@ if (loginExitBtnEl)
 fetchUserDirectory().catch((err) =>
   console.error("Không tải trước được danh bạ user:", err),
 );
+
+// Hiện lại nhật ký link đã lưu khi mở trang
+try {
+  const clearBtn = document.getElementById("clearLinkHistoryBtn");
+  const exportBtn = document.getElementById("exportLinkHistoryBtn");
+  if (clearBtn) clearBtn.onclick = clearLinkHistory;
+  if (exportBtn) exportBtn.onclick = exportLinkHistoryCsv;
+  renderLinkHistory();
+} catch (e) {}

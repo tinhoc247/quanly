@@ -213,60 +213,154 @@ label { font-weight: 600; }
 
 
 /* =====================================================================
-   GIAO DIỆN 2 CỘT (v53) — chỉ CSS, không đổi HTML/JS/luồng hệ thống
+   BỐ CỤC (v54) — cột trái: thiết lập (cấp độ → host → danh sách HS),
+   cột phải: Tạo bộ đề (thẻ chính). Các thẻ dữ liệu dài chiếm cả hàng.
    Muốn quay lại 1 cột: xoá toàn bộ khối này.
    ===================================================================== */
 .app { max-width: 1480px !important; }
 
-.app,
-.shell-page.active {
+.app {
   display: grid !important;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 18px;
+  grid-template-columns: minmax(340px, 440px) minmax(0, 1fr);
+  gap: 18px 20px;
   align-items: start;
 }
 
-/* Tiêu đề trang, footer và các phần không phải thẻ: chiếm trọn 2 cột */
-.app > .header,
-.shell-page.active > .header,
-.app > footer,
-.shell-page.active > footer,
+/* Thứ tự hiển thị (dùng chung cho desktop và điện thoại) */
+.app > .header          { order: 0; grid-column: 1 / -1; }
+.app > #cardWorking     { order: 1; }
+.app > #cardChooseHost  { order: 2; }
+.app > #cardCreateSet   { order: 3; }
+.app > #cardSchoolList  { order: 4; }
+.app > #cardResults     { order: 5; }
+.app > #cardQuestionImages { order: 6; }
+.app > #cardClearData   { order: 7; }
+.app > #cardQuestionBank   { order: 8; }
+.app > #cardQuestionEditor { order: 9; }
+.app > footer           { order: 10; grid-column: 1 / -1; }
 .app > .login-overlay,
-.app > .modal-overlay { grid-column: 1 / -1; }
+.app > .modal-overlay   { grid-column: 1 / -1; }
 
-/* Thẻ gọn hơn để vừa 2 cột; khoảng cách do gap lo */
-.app > .card,
-.shell-page.active > .card {
-  margin-bottom: 0 !important;
-  padding: 16px 20px !important;
-  min-width: 0;
-}
-.app .card h2,
-.shell-page .card h2 { font-size: 16.5px !important; }
-.app .card .desc,
-.shell-page .card .desc { font-size: 13.5px !important; margin-bottom: 10px; }
+/* Desktop: 3 thẻ thiết lập xếp dọc bên trái, Tạo bộ đề cao bên phải */
+.app > #cardWorking    { grid-column: 1; grid-row: 2; }
+.app > #cardChooseHost { grid-column: 1; grid-row: 3; }
+.app > #cardSchoolList { grid-column: 1; grid-row: 4; }
+.app > #cardCreateSet  { grid-column: 2; grid-row: 2 / span 3; }
 
-/* Thẻ có bảng / danh sách dài / trình sửa: giữ chiều rộng đầy đủ */
+/* Thẻ có bảng / danh sách dài / trình sửa: chiếm trọn hàng */
 #cardResults,
 #cardQuestionBank,
 #cardQuestionEditor,
-#cardQuestionImages { grid-column: 1 / -1; }
+#cardQuestionImages,
+#cardClearData { grid-column: 1 / -1; }
 
-/* Trường hợp thẻ Host đang bao các thẻ phía sau (div chưa đóng):
-   cho các thẻ con xếp 2 cột bên trong nó, thẻ rộng vẫn chiếm cả hàng */
-#cardChooseHost { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; align-items: start; }
-#cardChooseHost > :not(.card) { grid-column: 1 / -1; }
-#cardChooseHost > .card { margin-bottom: 0 !important; min-width: 0; }
-#cardChooseHost.collapsed { display: block; }
+.app > .card {
+  margin-bottom: 0 !important;
+  padding: 18px 22px !important;
+  min-width: 0;
+}
+.app .card h2 { font-size: 16.5px !important; }
+.app .card .desc { font-size: 13.5px !important; margin-bottom: 10px; }
 
-/* Ô chọn / nút không tràn cột hẹp */
-.app select, .shell-page select { max-width: 100%; }
-#hostSelect { min-width: 0 !important; flex: 1 1 200px; }
-.app .actions, .shell-page .actions { flex-wrap: wrap; }
+/* Màu viền trên cố định theo từng thẻ (không phụ thuộc thứ tự DOM) */
+#cardWorking       { border-top-color: var(--cyan)   !important; }
+#cardChooseHost    { border-top-color: var(--orange) !important; }
+#cardCreateSet     { border-top-color: var(--blue)   !important; }
+#cardSchoolList    { border-top-color: var(--violet) !important; }
+#cardResults       { border-top-color: var(--green)  !important; }
+#cardQuestionImages{ border-top-color: var(--pink)   !important; }
+#cardClearData     { border-top-color: var(--red)    !important; }
+#cardQuestionBank  { border-top-color: var(--violet) !important; }
+#cardQuestionEditor{ border-top-color: var(--cyan)   !important; }
 
-/* Màn hình hẹp: về lại 1 cột */
+/* Cột trái hẹp: ô chọn và nút xếp gọn, không tràn */
+.app select { max-width: 100%; }
+#hostSelect { min-width: 0 !important; flex: 1 1 100%; width: 100%; }
+#cardChooseHost .actions { flex-direction: column; align-items: stretch !important; }
+#cardChooseHost .actions .btn { justify-content: center; }
+#cardWorking .subject-list { max-width: none; }
+.app .actions { flex-wrap: wrap; }
+
+/* Thẻ Tạo bộ đề: nút tạo nổi bật, danh sách chủ đề cao hơn vì cột rộng */
+#cardCreateSet #topicListBox { max-height: 340px !important; }
+#cardCreateSet .download-row .btn-lg { width: 100%; }
+
+/* Màn hình hẹp: 1 cột, thứ tự: cấp độ → host → tạo bộ đề → danh sách HS → còn lại */
 @media (max-width: 1100px) {
-  .app,
-  .shell-page.active,
-  #cardChooseHost { grid-template-columns: minmax(0, 1fr); }
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .app > #cardWorking,
+  .app > #cardChooseHost,
+  .app > #cardCreateSet,
+  .app > #cardSchoolList { grid-column: 1; grid-row: auto; }
+}
+
+/* Ô nhập số trong thẻ Tạo bộ đề: đủ rộng để đọc hết chữ gợi ý */
+#topicQuestionCount,
+#topicMaxSetsToCreate { width: 260px !important; max-width: 100%; }
+
+
+/* =====================================================================
+   NAVBAR TRÁI (v54)
+   ===================================================================== */
+:root { --side-nav-w: 250px; }
+
+.side-nav {
+  position: fixed; top: 0; left: 0; bottom: 0; width: var(--side-nav-w);
+  z-index: 50; display: flex; flex-direction: column; gap: 4px;
+  padding: 18px 12px 24px; overflow-y: auto;
+  background: rgba(255,255,255,.92);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 24px rgba(47,107,255,.08);
+}
+.side-nav-brand {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 800; font-size: 17px; color: var(--text);
+  padding: 6px 10px 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.side-nav-logo {
+  width: 34px; height: 34px; border-radius: 10px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--grad-main, linear-gradient(135deg,#2f6bff,#7c4dff)); font-size: 18px;
+}
+.side-nav-section {
+  font-size: 11.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--text-mute); padding: 14px 12px 4px;
+}
+.side-nav a {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 12px; text-decoration: none;
+  font-size: 14.5px; font-weight: 700; color: var(--text);
+  border: 1px solid transparent; transition: background .15s, color .15s, transform .15s;
+}
+.side-nav a .ni { width: 24px; text-align: center; font-size: 17px; flex: none; }
+.side-nav a:hover { background: var(--blue-pale); color: var(--blue-dark); transform: translateX(2px); }
+.side-nav a.active {
+  background: var(--grad-main, linear-gradient(135deg,#2f6bff,#7c4dff)); color: #fff;
+  box-shadow: 0 6px 16px rgba(47,107,255,.28);
+}
+
+body.admin-locked .side-nav { filter: blur(3px); pointer-events: none; user-select: none; }
+.app > .card { scroll-margin-top: 18px; }
+
+/* Desktop: chừa chỗ cho navbar bên trái */
+@media (min-width: 1101px) {
+  body { padding-left: var(--side-nav-w); }
+  .app { max-width: 1320px !important; }
+}
+
+/* Màn hình hẹp: navbar thành thanh cuộn ngang ghim ở đầu trang */
+@media (max-width: 1100px) {
+  .side-nav {
+    position: sticky; top: 0; bottom: auto; width: auto;
+    flex-direction: row; align-items: center; gap: 6px;
+    padding: 8px 10px; overflow-x: auto; overflow-y: hidden;
+    border-right: 0; border-bottom: 1px solid var(--border);
+    box-shadow: 0 4px 18px rgba(47,107,255,.1);
+  }
+  .side-nav-brand, .side-nav-section { display: none !important; }
+  .side-nav a { flex: none; white-space: nowrap; padding: 8px 12px; font-size: 13.5px; }
+  .side-nav a:hover { transform: none; }
+  .app > .card { scroll-margin-top: 64px; }
 }
