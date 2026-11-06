@@ -2373,13 +2373,13 @@ function renderDragFill(q, body, s) {
   } else {
     const sentence = document.createElement("div");
     sentence.className = "dragfill-sentence";
-    const parts = q.template.split(/(\{\d+\})/g);
+    const parts = splitTemplate(q.template);
     parts.forEach((part) => {
       const m = part.match(/^\{(\d+)\}$/);
       if (m) {
         sentence.appendChild(makeBlank(Number(m[1])));
       } else if (part) {
-        sentence.appendChild(document.createTextNode(part));
+        appendRichText(sentence, part);
       }
     });
     wrap.appendChild(sentence);
@@ -2720,6 +2720,30 @@ function renderClassify2(q, body, s) {
   wrap.appendChild(rows);
   body.appendChild(wrap);
 }
+// Chuẩn hoá template điền khuyết: sửa placeholder lỗi ({ 1 }, {1, 2}, ｛1｝) và tách theo {n}
+function splitTemplate(tpl) {
+  let t = String(tpl == null ? "" : tpl)
+    .replace(/[｛{]\s*(\d+)\s*[｝}]/g, "{$1}")
+    .replace(/(^|[^{\d])(\d+)\}/g, "$1{$2}")
+    .replace(/\{(\d+)(?=[^\d}]|$)/g, "{$1}");
+  return t.split(/(\{\d+\})/g);
+}
+// Thêm text vào container, hiểu **in đậm** thay vì in nguyên dấu **
+function appendRichText(container, text) {
+  String(text)
+    .split(/(\*\*[^*]+?\*\*)/g)
+    .forEach((seg) => {
+      if (!seg) return;
+      const m = seg.match(/^\*\*([^*]+?)\*\*$/);
+      if (m) {
+        const b = document.createElement("strong");
+        b.textContent = m[1];
+        container.appendChild(b);
+      } else {
+        container.appendChild(document.createTextNode(seg));
+      }
+    });
+}
 function renderSelectFill(q, body, s) {
   if (!s.placed) s.placed = {};
   const locked = isLocked(q);
@@ -2727,7 +2751,7 @@ function renderSelectFill(q, body, s) {
   wrap.className = "selectfill-wrap";
   const sentence = document.createElement("div");
   sentence.className = "selectfill-sentence";
-  const parts = q.template.split(/(\{\d+\})/g);
+  const parts = splitTemplate(q.template);
   parts.forEach((part) => {
     const m = part.match(/^\{(\d+)\}$/);
     if (m) {
@@ -2756,10 +2780,17 @@ function renderSelectFill(q, body, s) {
         placeholderOpt.value = "";
         placeholderOpt.textContent = "________";
         selectEl.appendChild(placeholderOpt);
+        const boRaw = Array.isArray(q.blankOptions)
+          ? q.blankOptions[blankIdx]
+          : null;
+        const boList = Array.isArray(boRaw)
+          ? boRaw
+          : boRaw && Array.isArray(boRaw.allowed)
+            ? boRaw.allowed
+            : null;
         const allowedIdx =
-          Array.isArray(q.blankOptions) &&
-          Array.isArray(q.blankOptions[blankIdx])
-            ? q.blankOptions[blankIdx]
+          boList && boList.length
+            ? boList.filter((i) => i >= 0 && i < q.options.length)
             : q.options.map((_, i) => i);
         allowedIdx.forEach((i) => {
           const optEl = document.createElement("option");
@@ -2780,7 +2811,7 @@ function renderSelectFill(q, body, s) {
         sentence.appendChild(selectEl);
       }
     } else if (part) {
-      sentence.appendChild(document.createTextNode(part));
+      appendRichText(sentence, part);
     }
   });
   wrap.appendChild(sentence);

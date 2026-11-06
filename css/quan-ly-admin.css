@@ -210,3 +210,63 @@ label { font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+
+/* =====================================================================
+   GIAO DIỆN 2 CỘT (v53) — chỉ CSS, không đổi HTML/JS/luồng hệ thống
+   Muốn quay lại 1 cột: xoá toàn bộ khối này.
+   ===================================================================== */
+.app { max-width: 1480px !important; }
+
+.app,
+.shell-page.active {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 18px;
+  align-items: start;
+}
+
+/* Tiêu đề trang, footer và các phần không phải thẻ: chiếm trọn 2 cột */
+.app > .header,
+.shell-page.active > .header,
+.app > footer,
+.shell-page.active > footer,
+.app > .login-overlay,
+.app > .modal-overlay { grid-column: 1 / -1; }
+
+/* Thẻ gọn hơn để vừa 2 cột; khoảng cách do gap lo */
+.app > .card,
+.shell-page.active > .card {
+  margin-bottom: 0 !important;
+  padding: 16px 20px !important;
+  min-width: 0;
+}
+.app .card h2,
+.shell-page .card h2 { font-size: 16.5px !important; }
+.app .card .desc,
+.shell-page .card .desc { font-size: 13.5px !important; margin-bottom: 10px; }
+
+/* Thẻ có bảng / danh sách dài / trình sửa: giữ chiều rộng đầy đủ */
+#cardResults,
+#cardQuestionBank,
+#cardQuestionEditor,
+#cardQuestionImages { grid-column: 1 / -1; }
+
+/* Trường hợp thẻ Host đang bao các thẻ phía sau (div chưa đóng):
+   cho các thẻ con xếp 2 cột bên trong nó, thẻ rộng vẫn chiếm cả hàng */
+#cardChooseHost { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; align-items: start; }
+#cardChooseHost > :not(.card) { grid-column: 1 / -1; }
+#cardChooseHost > .card { margin-bottom: 0 !important; min-width: 0; }
+#cardChooseHost.collapsed { display: block; }
+
+/* Ô chọn / nút không tràn cột hẹp */
+.app select, .shell-page select { max-width: 100%; }
+#hostSelect { min-width: 0 !important; flex: 1 1 200px; }
+.app .actions, .shell-page .actions { flex-wrap: wrap; }
+
+/* Màn hình hẹp: về lại 1 cột */
+@media (max-width: 1100px) {
+  .app,
+  .shell-page.active,
+  #cardChooseHost { grid-template-columns: minmax(0, 1fr); }
+}
