@@ -330,7 +330,7 @@ body.admin-locked .side-nav { filter: blur(3px); pointer-events: none; user-sele
 
 /* Chân navbar: tên người dùng + nút Đăng xuất */
 .side-nav-footer {
-  margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border);
+  margin-bottom: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 8px;
 }
 .side-nav-user {
@@ -351,8 +351,13 @@ body.admin-locked .side-nav { filter: blur(3px); pointer-events: none; user-sele
 .side-nav-logout:disabled { opacity: .6; cursor: wait; }
 
 @media (max-width: 1100px) {
-  .side-nav-footer { margin: 0 0 0 auto; padding: 0 0 0 8px; border: 0; flex-direction: row; flex: none; position: sticky; right: 0; background: rgba(255,255,255,.96); box-shadow: -10px 0 12px rgba(255,255,255,.96); }
+  .side-nav-footer { order: 99; margin: 0 0 0 auto; padding: 0 0 0 8px; border: 0; flex-direction: row; flex: none; position: sticky; right: 0; background: rgba(255,255,255,.96); box-shadow: -10px 0 12px rgba(255,255,255,.96); }
   .side-nav-user { display: none !important; }
   .side-nav-logout { width: auto; white-space: nowrap; padding: 8px 12px; font-size: 13.5px; }
   .side-nav-logout:hover { transform: none; }
 }
+
+
+/* Gộp "Chọn cấp độ" + "Chọn Host" trên 1 trang */
+.merged-host { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border); }
+.merged-host h2 { margin-top: 0; }

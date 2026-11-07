@@ -5344,7 +5344,7 @@ function normalizeNameForCompare(s) {
 }
 const TEAMGV_LOGIN_NAME = "teamgv";
 const TEAMGV_ONLY_CARD_IDS = [
-  "cardResults",
+  // "cardResults" — tạm ẩn (chưa sử dụng), card luôn display:none trong HTML
   "cardQuestionImages",
   "cardQuestionBank",
   "cardQuestionEditor",
